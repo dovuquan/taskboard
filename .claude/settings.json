@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(scripts/ci.sh)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv run ruff check:*)",
+      "Bash(uv run ruff format:*)",
+      "Bash(uv run taskboard check:*)",
+      "Bash(uv sync)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm install --frozen-lockfile)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git merge-base:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git rebase:*)",
+      "Bash(uv add:*)",
+      "Bash(uv remove:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm remove:*)",
+      "Bash(pnpm update:*)",
+      "Bash(docker compose down:*)",
+      "Bash(docker volume rm:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.production)",
+      "Bash(cat .env:*)",
+      "Edit(./design/**)",
+      "Write(./design/**)",
+      "Bash(sudo:*)",
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(npm:*)",
+      "Bash(npx:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/fmt-on-edit.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
