@@ -1,0 +1,43 @@
+/* Taskboard design tokens, extracted from design/taskboard-prototype.html (round 3). Read-only reference. */
+/* tokens */
+/* Layout: a thin prototype strip, then the app: app bar, page header, content (board = horizontal lanes). */
+:root {
+  --bg: #f3f5f2; --surface: #ffffff; --surface-2: #e9ede8; --surface-3: #dfe5de;
+  --line: #d3dad2; --fg: #1b2420; --muted: #5a675f; --faint: #8a968e;
+  --accent: #1d6b57; --accent-fg: #ffffff; --accent-soft: #d8ede5;
+  --warn: #a95c08; --warn-soft: #fbead3; --danger: #b3261e; --danger-soft: #fbe3df; --ok: #2c7a3a; --ok-soft: #dcf0df;
+  --proto-bg: #26302b; --proto-fg: #dbe4de;
+  --l-launch: #2f8a5f; --l-bug: #c4473a; --l-docs: #3769b0; --l-ops: #c27d14; --l-marketing: #9b4f9a; --l-research: #5f6f78; --l-design: #6a55b8;
+  --radius-s: 6px; --radius-m: 10px; --radius-l: 14px;
+  --shadow-1: 0 1px 2px rgba(18, 30, 24, .08), 0 0 0 1px rgba(18, 30, 24, .04);
+  --shadow-2: 0 18px 48px rgba(18, 30, 24, .22);
+  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Figtree", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111613; --surface: #19201c; --surface-2: #212924; --surface-3: #2a332d;
+    --line: #2e3832; --fg: #e4ebe6; --muted: #9eaba3; --faint: #6f7c74;
+    --accent: #5cc4a3; --accent-fg: #0b1a14; --accent-soft: #1b3a30;
+    --warn: #eaa452; --warn-soft: #3a2914; --danger: #f2857a; --danger-soft: #3d1c19; --ok: #73c785; --ok-soft: #1c3622;
+    --proto-bg: #0a0e0c; --proto-fg: #c9d4cd;
+    --l-launch: #4fb383; --l-bug: #e06a5c; --l-docs: #6d9ae0; --l-ops: #e0a142; --l-marketing: #c47bc3; --l-research: #8d9ca5; --l-design: #9a87e6;
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, .4), 0 0 0 1px rgba(255, 255, 255, .04);
+    --shadow-2: 0 18px 48px rgba(0, 0, 0, .55);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111613; --surface: #19201c; --surface-2: #212924; --surface-3: #2a332d;
+  --line: #2e3832; --fg: #e4ebe6; --muted: #9eaba3; --faint: #6f7c74;
+  --accent: #5cc4a3; --accent-fg: #0b1a14; --accent-soft: #1b3a30;
+  --warn: #eaa452; --warn-soft: #3a2914; --danger: #f2857a; --danger-soft: #3d1c19; --ok: #73c785; --ok-soft: #1c3622;
+  --proto-bg: #0a0e0c; --proto-fg: #c9d4cd;
+  --l-launch: #4fb383; --l-bug: #e06a5c; --l-docs: #6d9ae0; --l-ops: #e0a142; --l-marketing: #c47bc3; --l-research: #8d9ca5; --l-design: #9a87e6;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4), 0 0 0 1px rgba(255, 255, 255, .04);
+  --shadow-2: 0 18px 48px rgba(0, 0, 0, .55);
+  color-scheme: dark;
+}
+/* end tokens */
