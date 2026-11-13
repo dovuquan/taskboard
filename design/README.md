@@ -4,10 +4,11 @@ Read-only reference for the build. Do not edit files in `design/`.
 
 | File | What it is |
 |---|---|
-| `taskboard-prototype.html` | The clickable prototype, round 3 (12 Nov 2026). Open it in a browser and start at **All screens**. |
+| `taskboard-prototype.html` | The clickable prototype, round 4 (13 Nov 2026). Open it in a browser and start at **All screens**. |
 | `tokens.css` | Colors, spacing, radii, shadows and type from the prototype, light and dark. Turn it into the app theme. |
 
 Build plan: https://claude.ai/artifact/YHk8KfjB6T9zWz2uEqSyvd
+Prototype review and tickets: https://claude.ai/artifact/DE1cMSbPG9Zpzx4tnzpWKh
 Live prototype: https://claude.ai/artifact/PqAuSahWYrjzsFpusJ3vQ3
 
 ## Precedence
@@ -26,6 +27,8 @@ Live prototype: https://claude.ai/artifact/PqAuSahWYrjzsFpusJ3vQ3
   installed, empty, signed out), the latency (instant, typical, slow, never answers) and faults
   (reads fail, saves fail, unreachable, session expired). Every screen state the app needs is
   shown there; build each one from real requests.
+- **Trouble** also shows a board at its 1,000-card limit, a Private board without an owner (admins
+  take ownership), and a card someone else moved first ("This card moved").
 - Copy for failure and loss is short and says what is kept, e.g. "Your change was undone",
   "Nothing is deleted."
 
@@ -33,24 +36,28 @@ Live prototype: https://claude.ai/artifact/PqAuSahWYrjzsFpusJ3vQ3
 
 | Milestone | Screens (prototype hash) |
 |---|---|
-| M1 Platform | Sign in (`#sign-in`), Sign-in refused (`#refused`), Workspace members (`#members`), Boards empty state (`#boards` in the "Just installed" scenario) |
-| M2 Boards | Boards (`#boards`), Board with list menu and Add list (`#board`), Card detail with its own link (`#card/TB-14`), Board settings and members (`#board-settings`) |
+| M1 Platform | Sign in (`#sign-in`), Sign-in refused (`#refused`), Workspace members with refused sign-ins (`#members`), Boards empty state (`#boards` in the "Just installed" scenario) |
+| M2 Boards | Boards with Archived boards and Boards without an owner (`#boards`), Board with list menu, list drag and Add list (`#board`), Card detail with its own link and comment edit (`#card/TB-14`), Board settings and members (`#board-settings`), Archived items (`#archived`) |
 | M3 Polish | Filter cards (`#filter`), Keyboard shortcuts (`#shortcuts`), Undo toasts, loading and error states (prototype panel) |
 
 ## What the prototype only pretends
 
 - Google sign-in: the button just opens the boards list.
 - Saving: changes live in the page and reset on reload.
-- Other people: nobody else sees your changes; live updates are Later in the plan.
+- Other people: nobody else sees your changes. The real board reloads on tab focus and every 30
+  seconds; here only the Trouble scenario shows a card someone else moved.
 - The server: scenarios, latency and faults are faked in the page.
 
-## Decisions the prototype made (Assumed, listed in the plan)
+## Decisions shown in round 4 (from the prototype review grill, 13 Nov 2026)
 
-- Admins see refused sign-ins of the last 7 days on the Members page.
-- Archiving a list archives its cards with it, with Undo; nothing is deleted.
-- Checklist items can be deleted (with Undo); "Hide checked items" is a per-viewer view choice.
-- Each card has its own link; a link to an archived or missing card says so.
-- Long links show host and the start of the path; the full address is in the tooltip.
-- The card members picker gets a search box above 8 assignable people.
-- Ctrl/⌘+Enter posts a comment or saves the description.
-- Every save shows at once and is undone with a short message if the server refuses it.
+- Archive is soft: archived lists and cards appear under **Archived** on the board, archived boards
+  under **Archived boards** on the Boards page; owners and admins restore them. Nothing is deleted.
+- Board settings adds only existing workspace members (search by name or email, no free email).
+- A board keeps at least one owner; a workspace keeps at least one admin.
+- A workspace admin acts as owner on every board they can see; Private boards they are not on stay
+  hidden, except ownerless ones in **Boards without an owner**.
+- People not on a Workspace board see it as **Observer**.
+- Own comments can be edited or deleted within 24 hours; edits show "edited".
+- Lists reorder by drag. Due dates have no special Done rule.
+- The session-expired screen promises no admin action; the refused page names no admin.
+- Limits: 1,000 cards and 50 lists per board, 80-character board and list names.
