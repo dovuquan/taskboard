@@ -24,7 +24,14 @@ The design reference: `design/` (prototype, `tokens.css`, `README.md` with the s
   permissive licenses only.
 - Never edit `design/`.
 - Conventional Commits, keep the `Co-Authored-By` trailer, branches `feat/tb-<n>-<slug>`,
-  `fix/tb-<n>-<slug>`, `chore/<slug>`. Never push unless asked.
+  `fix/tb-<n>-<slug>`, `chore/<slug>`.
+- Branch flow: `dev` is the integration branch and `main` holds released milestones only.
+  Every ticket branches from `dev` and opens its pull request into `dev`; the owner merges it.
+  At each milestone gate (G1, G2, G3) the owner checks `dev` with `docker compose up --build`
+  and the milestone's Done-when checks, then merges a `dev` → `main` pull request and tags
+  `m1`, `m2` or `m3`.
+- Push only your own feature branch, to open or update its pull request. Never push `dev` or
+  `main` directly, never force-push, never merge pull requests yourself.
 - Use pnpm for the web app, never npm. Use uv for the backend.
 - Stop and ask only for: the Google Cloud step, machine changes outside the repo, a check that
   cannot pass, destructive or outward-facing actions.
