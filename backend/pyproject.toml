@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Taskboard backend: FastAPI app that also serves the web build."
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.20.1",
     "fastapi",
+    "sqlalchemy>=2.1.8",
     "uvicorn",
 ]
 
