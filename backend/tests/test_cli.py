@@ -1,0 +1,164 @@
+import os
+import subprocess
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from taskboard import cli
+from taskboard.db import make_engine
+from taskboard.models import Event, User, WorkspaceMember
+
+
+@pytest.fixture(autouse=True)
+def _url(db_url, monkeypatch):
+    monkeypatch.setenv("TASKBOARD_DATABASE_URL", db_url)
+
+
+@pytest.fixture
+def migrated(db_url):
+    assert cli.main(["migrate"]) == 0
+    return db_url
+
+
+def query(db_url, fn):
+    engine = make_engine(db_url)
+    try:
+        with Session(engine) as s:
+            return fn(s)
+    finally:
+        engine.dispose()
+
+
+def user_by_email(db_url, email):
+    return query(db_url, lambda s: s.scalar(select(User).where(User.email == email)))
+
+
+def role_of(db_url, email):
+    def f(s):
+        return s.scalar(select(WorkspaceMember.role).join(User).where(User.email == email))
+
+    return query(db_url, f)
+
+
+def events(db_url):
+    return query(db_url, lambda s: list(s.scalars(select(Event).order_by(Event.id))))
+
+
+def test_migrate_creates_tables_and_is_repeatable(db_url):
+    assert cli.main(["migrate"]) == 0
+    assert cli.main(["migrate"]) == 0
+    assert query(db_url, lambda s: s.scalar(select(func.count()).select_from(User))) == 0
+
+
+def test_admin_creates_a_pending_admin_with_one_event(migrated):
+    assert cli.main(["admin", "--email", "New.Person@asnet.com.vn"]) == 0
+    user = user_by_email(migrated, "new.person@asnet.com.vn")
+    assert user.google_sub is None
+    assert role_of(migrated, "new.person@asnet.com.vn") == "admin"
+    [event] = events(migrated)
+    assert event.kind == "member.added"
+    assert event.actor_id is None
+    assert event.subject_type == "user"
+    assert event.subject_id == str(user.id)
+    assert event.data == {"role": "admin", "pending": True}
+
+
+def test_admin_promotes_an_existing_member(migrated):
+    def add(s):
+        s.add(User(id=7, email="bob@asnet.com.vn", google_sub="sub-7"))
+        s.flush()
+        s.add(WorkspaceMember(user_id=7, role="member"))
+        s.commit()
+
+    query(migrated, add)
+    assert cli.main(["admin", "--email", "bob@asnet.com.vn"]) == 0
+    assert role_of(migrated, "bob@asnet.com.vn") == "admin"
+    [event] = events(migrated)
+    assert event.kind == "member.role_changed"
+    assert event.subject_id == "7"
+    assert event.data == {"from": "member", "to": "admin"}
+
+
+def test_admin_again_changes_nothing(migrated, capsys):
+    cli.main(["admin", "--email", "x@asnet.com.vn"])
+    capsys.readouterr()
+    assert cli.main(["admin", "--email", "x@asnet.com.vn"]) == 0
+    assert "already an admin" in capsys.readouterr().out
+    assert len(events(migrated)) == 1
+
+
+def test_admin_works_after_the_person_signs_in(migrated):
+    cli.main(["admin", "--email", "x@asnet.com.vn"])
+    before = user_by_email(migrated, "x@asnet.com.vn").id
+
+    def sign_in(s):
+        u = s.scalar(select(User).where(User.email == "x@asnet.com.vn"))
+        u.google_sub = "sub-x"
+        u.name = "X"
+        s.commit()
+
+    query(migrated, sign_in)
+
+    def demote(s):
+        s.get(WorkspaceMember, before).role = "member"
+        s.commit()
+
+    query(migrated, demote)
+    assert cli.main(["admin", "--email", "x@asnet.com.vn"]) == 0
+    assert user_by_email(migrated, "x@asnet.com.vn").id == before
+    assert role_of(migrated, "x@asnet.com.vn") == "admin"
+    assert events(migrated)[-1].kind == "member.role_changed"
+
+
+@pytest.mark.parametrize("email", ["x@gmail.com", "nobody", "x@asnet.com.vn.evil.com", ""])
+def test_admin_refuses_an_email_outside_the_workspace(migrated, email):
+    assert cli.main(["admin", "--email", email]) == 2
+    assert events(migrated) == []
+    assert query(migrated, lambda s: s.scalar(select(func.count()).select_from(User))) == 0
+
+
+def test_seed_adds_five_members_once(migrated):
+    assert cli.main(["seed"]) == 0
+    assert cli.main(["seed"]) == 0
+    users = query(migrated, lambda s: list(s.scalars(select(User))))
+    assert len(users) == 5
+    assert all(u.email.endswith("@asnet.com.vn") and u.google_sub is None for u in users)
+    assert all(role_of(migrated, u.email) == "member" for u in users)
+    assert [e.kind for e in events(migrated)] == ["member.added"] * 5
+
+
+def test_check_prints_integrity_and_schema_head(migrated, capsys):
+    capsys.readouterr()
+    assert cli.main(["check"]) == 0
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0001 (head)\n"
+
+
+def test_check_on_an_unmigrated_database_fails(capsys):
+    assert cli.main(["check"]) == 1
+    assert "schema: none" in capsys.readouterr().out
+
+
+def test_a_failing_write_leaves_neither_change_nor_event(migrated, monkeypatch):
+    real = cli.record_change
+
+    def boom(session, change, **kw):
+        return real(session, lambda s: (change(s), 1 / 0)[0], **kw)
+
+    monkeypatch.setattr(cli, "record_change", boom)
+    with pytest.raises(ZeroDivisionError):
+        cli.main(["admin", "--email", "x@asnet.com.vn"])
+    assert user_by_email(migrated, "x@asnet.com.vn") is None
+    assert events(migrated) == []
+
+
+def test_entry_point_runs_check(migrated):
+    result = subprocess.run(
+        ["uv", "run", "taskboard", "check"],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "TASKBOARD_DATABASE_URL": migrated},
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "integrity: ok\nschema: 0001 (head)\n"
