@@ -10,6 +10,9 @@ dependencies = [
     "uvicorn",
 ]
 
+[project.scripts]
+taskboard = "taskboard.cli:main"
+
 [dependency-groups]
 dev = [
     "httpx",
