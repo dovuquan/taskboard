@@ -1,10 +1,15 @@
 """FastAPI application: the JSON API plus the built web app."""
 
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
+
+from taskboard.db import database_url, make_engine, run_migrations
 
 _REPO_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
@@ -13,11 +18,26 @@ def _web_dist() -> Path:
     return Path(os.environ.get("TASKBOARD_WEB_DIST", _REPO_WEB_DIST))
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Taskboard")
+def create_app(url: str | None = None) -> FastAPI:
+    url = url or database_url()
+    engine = make_engine(url)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        run_migrations(url)
+        yield
+        engine.dispose()
+
+    app = FastAPI(title="Taskboard", lifespan=lifespan)
+    app.state.engine = engine
 
     @app.get("/health")
-    def health() -> dict[str, str]:
+    def health():
+        try:
+            with app.state.engine.connect() as conn:
+                conn.execute(text("SELECT 1")).scalar_one()
+        except Exception:
+            return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
 
     web_dist = _web_dist()
