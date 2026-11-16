@@ -5,6 +5,6 @@ import { App } from "./App";
 
 describe("App", () => {
   it("renders the product name", () => {
-    expect(renderToString(<App />)).toContain("Taskboard");
+    expect(renderToString(<App />)).toBe("<main><h1>Taskboard</h1></main>");
   });
 });

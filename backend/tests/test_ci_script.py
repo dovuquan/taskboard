@@ -63,4 +63,4 @@ def test_ci_exits_non_zero_when_a_check_fails(tmp_path, failing_step):
 
     assert result.returncode != 0
     assert calls == EXPECTED_STEPS[: EXPECTED_STEPS.index(failing_step) + 1]
-    assert f"FAILED: {failing_step}" in result.stderr
+    assert result.stderr == f"FAILED: {failing_step}\n"
