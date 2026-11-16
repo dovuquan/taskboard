@@ -6,3 +6,9 @@ __pycache__/
 *.pyc
 .coverage
 node_modules/
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+web/dist/
+*.tsbuildinfo
