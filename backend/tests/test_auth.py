@@ -446,3 +446,47 @@ def test_a_token_endpoint_answering_with_a_non_object_is_an_oauth_error(monkeypa
 
     with pytest.raises(auth.TokenError):
         auth.GoogleOidc().exchange("code", "verifier", "http://localhost:8000/auth/callback")
+
+
+def _clash_then(monkeypatch, clashes):
+    """Make `_resolve_user` raise IntegrityError `clashes` times, then behave normally."""
+    from sqlalchemy.exc import IntegrityError
+
+    real = auth._resolve_user
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] <= clashes:
+            raise IntegrityError("insert", {}, Exception("clash"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(auth, "_resolve_user", flaky)
+
+
+def test_a_clashing_first_sign_in_is_retried_once(client, oidc, db_url, monkeypatch):
+    _clash_then(monkeypatch, 1)
+
+    response = sign_in(client, oidc)
+
+    assert response.headers["location"] == "/boards"
+    assert [e.kind for e in events(db_url)] == ["member.added"]
+    assert [(e.outcome, e.reason) for e in auth_events(db_url)] == [("accepted", None)]
+    assert query(db_url, lambda s: len(list(s.scalars(select(UserSession))))) == 1
+
+
+def test_a_sign_in_that_clashes_twice_is_refused_with_the_normalised_email(
+    client, oidc, db_url, monkeypatch
+):
+    _clash_then(monkeypatch, 2)
+
+    response = sign_in(client, oidc, good_claims(email=" Ada@Example.com "))
+
+    refused_with(response, "email_conflict")
+    [event] = auth_events(db_url)
+    assert (event.outcome, event.reason, event.email) == (
+        "refused",
+        "email_conflict",
+        "ada@example.com",
+    )
+    assert events(db_url) == []
