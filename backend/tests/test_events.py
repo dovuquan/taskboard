@@ -12,7 +12,7 @@ def session(db_url):
     run_migrations(db_url)
     engine = make_engine(db_url)
     with Session(engine) as s:
-        s.add_all([User(id=1, email="admin@asnet.com.vn"), User(id=2, email="bob@asnet.com.vn")])
+        s.add_all([User(id=1, email="admin@example.com"), User(id=2, email="bob@example.com")])
         s.flush()
         s.add_all(
             [WorkspaceMember(user_id=1, role="admin"), WorkspaceMember(user_id=2, role="member")]

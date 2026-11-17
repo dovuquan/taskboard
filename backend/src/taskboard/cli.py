@@ -12,8 +12,7 @@ from sqlalchemy.orm import Session
 from taskboard.db import _MIGRATIONS, make_engine, run_migrations
 from taskboard.events import record_change
 from taskboard.models import User, WorkspaceMember
-
-WORKSPACE_DOMAIN = "asnet.com.vn"
+from taskboard.settings import allowed_hd
 
 SEED_PEOPLE = [
     ("Linh Tran", "linh.tran"),
@@ -24,12 +23,19 @@ SEED_PEOPLE = [
 ]
 
 
-def _valid_email(raw: str) -> str | None:
+def _valid_email(raw: str, domain_name: str) -> str | None:
     email = raw.strip().lower()
     local, _, domain = email.partition("@")
-    if local and domain == WORKSPACE_DOMAIN:
+    if local and domain == domain_name:
         return email
     return None
+
+
+def _require_domain() -> str | None:
+    domain = allowed_hd()
+    if domain is None:
+        print("error: ALLOWED_HD is not set (see .env.example)", file=sys.stderr)
+    return domain
 
 
 def _next_user_id(session: Session) -> int:
@@ -64,9 +70,12 @@ def cmd_migrate(_args: argparse.Namespace) -> int:
 
 
 def cmd_admin(args: argparse.Namespace) -> int:
-    email = _valid_email(args.email)
+    domain = _require_domain()
+    if domain is None:
+        return 2
+    email = _valid_email(args.email, domain)
     if email is None:
-        print(f"error: email must be an address @{WORKSPACE_DOMAIN}", file=sys.stderr)
+        print(f"error: email must be an address @{domain}", file=sys.stderr)
         return 2
     engine = make_engine()
     try:
@@ -106,12 +115,15 @@ def cmd_admin(args: argparse.Namespace) -> int:
 
 
 def cmd_seed(_args: argparse.Namespace) -> int:
+    domain = _require_domain()
+    if domain is None:
+        return 2
     engine = make_engine()
     added = 0
     try:
         with Session(engine) as session:
             for name, local in SEED_PEOPLE:
-                email = f"{local}@{WORKSPACE_DOMAIN}"
+                email = f"{local}@{domain}"
                 if session.scalar(select(User.id).where(User.email == email)) is None:
                     _add_member(session, email, "member", name)
                     added += 1
