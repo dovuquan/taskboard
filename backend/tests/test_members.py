@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from support import auth_events, events, good_claims, query, sign_in, user_by_email
 
 from taskboard.db import make_engine
-from taskboard.models import AuthEvent, User, WorkspaceMember
+from taskboard.models import AuthEvent, User, UserSession, WorkspaceMember
 
 
 @pytest.fixture
@@ -96,11 +96,64 @@ def test_members_endpoints_need_a_session(client, method, path, body):
     assert response.json() == {"detail": "not_signed_in"}
 
 
+# ---- expired session and no membership ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/api/members", None),
+        ("PATCH", "/api/members/1", {"role": "admin"}),
+        ("GET", "/api/auth-events/refused", None),
+    ],
+)
+def test_members_endpoints_refuse_an_expired_session(as_user, db_url, method, path, body):
+    admin = as_user("root@example.com", "sub-root", "admin")
+
+    def expire(s):
+        row = s.scalars(select(UserSession)).one()
+        row.expires_at = row.created_at - timedelta(seconds=1)
+        s.commit()
+
+    query(db_url, expire)
+
+    response = admin.request(method, path, json=body)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "session_expired"}
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("PATCH", "/api/members/1", {"role": "admin"}),
+        ("GET", "/api/auth-events/refused", None),
+    ],
+)
+def test_a_user_without_a_workspace_membership_is_forbidden(as_user, db_url, method, path, body):
+    ghost = as_user("ghost@example.com", "sub-ghost", "admin")
+    ghost_id = user_id(db_url, "ghost@example.com")
+
+    def drop(s):
+        s.delete(s.get(WorkspaceMember, ghost_id))
+        s.commit()
+
+    query(db_url, drop)
+    before = len(events(db_url))
+
+    response = ghost.request(method, path, json=body)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert len(events(db_url)) == before
+
+
 # ---- list -----------------------------------------------------------------------
 
 
-def test_a_member_lists_everyone_by_email_including_pending_users(as_user, db_url):
-    ada = as_user("ada@example.com", "sub-ada")
+@pytest.mark.parametrize("caller_role", ["member", "admin"])
+def test_any_member_lists_everyone_by_email_including_pending_users(as_user, db_url, caller_role):
+    ada = as_user("ada@example.com", "sub-ada", caller_role)
     as_user("bob@example.com", "sub-bob", "admin")
     add_pending(db_url, "aaron@example.com")
 
@@ -114,7 +167,7 @@ def test_a_member_lists_everyone_by_email_including_pending_users(as_user, db_ur
     ]
     body = response.json()
     assert [m["pending"] for m in body] == [True, False, False]
-    assert [m["role"] for m in body] == ["member", "member", "admin"]
+    assert [m["role"] for m in body] == ["member", caller_role, "admin"]
     assert body[0]["joined_at"].endswith("Z") and body[0]["last_seen_at"] is None
     assert body[0]["name"] is None and body[0]["avatar_url"] is None
 
@@ -214,6 +267,34 @@ def test_change_role_refuses_to_remove_the_last_admin(as_user, db_url):
     finally:
         engine.dispose()
 
+    assert role_of(db_url, admin_id) == "admin"
+    assert len(events(db_url)) == before
+
+
+def test_the_in_transaction_recheck_refuses_to_remove_the_last_admin(as_user, db_url, monkeypatch):
+    """Get past the pre-check (it sees two admins) so only the re-check can stop the change."""
+    from taskboard import members
+    from taskboard.members import LastAdmin, change_role
+
+    as_user("root@example.com", "sub-root", "admin")
+    admin_id = user_id(db_url, "root@example.com")
+    before = len(events(db_url))
+    real = members._admin_count
+    calls: list[int] = []
+
+    def fake(session):
+        calls.append(1)
+        return 2 if len(calls) == 1 else real(session)
+
+    monkeypatch.setattr(members, "_admin_count", fake)
+    engine = make_engine(db_url)
+    try:
+        with Session(engine) as session, pytest.raises(LastAdmin):
+            change_role(session, actor_id=None, user_id=admin_id, role="member")
+    finally:
+        engine.dispose()
+
+    assert len(calls) >= 2
     assert role_of(db_url, admin_id) == "admin"
     assert len(events(db_url)) == before
 
