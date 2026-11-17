@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from taskboard import auth
 from taskboard.db import database_url, make_engine, run_migrations
 
 _REPO_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
@@ -39,6 +40,8 @@ def create_app(url: str | None = None) -> FastAPI:
         except Exception:
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
+
+    app.include_router(auth.router)
 
     web_dist = _web_dist()
     if web_dist.is_dir():
