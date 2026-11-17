@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 
 import pytest
@@ -150,6 +151,38 @@ def test_check_prints_integrity_and_schema_head(migrated, capsys):
 def test_check_on_an_unmigrated_database_fails(capsys):
     assert cli.main(["check"]) == 1
     assert capsys.readouterr().out == "integrity: ok\nschema: none\n"
+
+
+def raw_sqlite(db_url, sql):
+    """Run SQL without the engine's pragmas, so foreign keys stay off."""
+    conn = sqlite3.connect(db_url.removeprefix("sqlite:///"))
+    try:
+        conn.execute(sql)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_check_reports_a_foreign_key_violation(migrated, capsys):
+    raw_sqlite(
+        migrated,
+        "INSERT INTO workspace_members (user_id, role, joined_at) "
+        "VALUES (999, 'member', '2026-01-01 00:00:00')",
+    )
+    capsys.readouterr()
+
+    assert cli.main(["check"]) == 1
+    assert capsys.readouterr().out == (
+        "integrity: foreign key violation in workspace_members\nschema: 0001 (head)\n"
+    )
+
+
+def test_check_reports_a_schema_behind_head(migrated, capsys):
+    raw_sqlite(migrated, "UPDATE alembic_version SET version_num = '0000'")
+    capsys.readouterr()
+
+    assert cli.main(["check"]) == 1
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0000 (head is 0001)\n"
 
 
 def test_a_failing_write_leaves_neither_change_nor_event(migrated, monkeypatch):
