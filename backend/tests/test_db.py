@@ -1,11 +1,14 @@
 import threading
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from taskboard.app import create_app
+from taskboard.db import _MIGRATIONS as MIGRATIONS
 from taskboard.db import make_engine, run_migrations
 
 COLUMNS = {
@@ -46,6 +49,16 @@ def test_migration_creates_the_five_tables(db_url):
 def test_migration_is_repeatable(db_url):
     run_migrations(db_url)
     run_migrations(db_url)
+
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    engine = create_engine(db_url)
+    with engine.connect() as conn:
+        versions = conn.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+    engine.dispose()
+    assert versions == [head]
+    assert set(COLUMNS) <= set(inspect(create_engine(db_url)).get_table_names())
 
 
 def test_foreign_keys_are_enforced(db_url):
