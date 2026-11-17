@@ -19,4 +19,4 @@ def test_health_fails_when_the_database_cannot_be_read(db_url):
         response = client.get("/health")
 
     assert response.status_code == 503
-    assert response.json() != {"status": "ok"}
+    assert response.json() == {"status": "unavailable"}
