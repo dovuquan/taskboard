@@ -71,7 +71,7 @@ def test_startup_runs_migrations(db_url):
 def test_app_without_a_url_uses_the_temp_default(tmp_path):
     app = create_app()
 
-    assert str(app.state.engine.url.database).startswith(str(tmp_path))
+    assert app.state.engine.url.database == str(tmp_path / "default.db")
 
 
 def test_two_writers_never_see_database_is_locked(db_url):
