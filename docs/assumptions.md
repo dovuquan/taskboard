@@ -12,6 +12,7 @@ Each row says what was decided, why, and which ticket it came from.
 | T1 | `scripts/ci.sh` also runs `pnpm install --frozen-lockfile` and stops at the first failing check. | A clean checkout has no `node_modules`; stopping early keeps the first error visible. |
 | T1 | The Vite dev server proxies `/auth` and `/health` as well as `/api`. | Sign-in routes live under `/auth`. |
 | T2 | Added `sqlalchemy` and `alembic`, both named in the plan. | Models and migrations. |
+| T2 | `mako` (MIT) and `markupsafe` (BSD-3-Clause) arrive as transitive dependencies of `alembic`; they are not used directly. | Alembic needs them for its migration templates; approved with Alembic. |
 | T2 | Keys: integer `id` on `users`, `auth_events` and `events`; `workspace_members.user_id` is its primary key (one row per user); `sessions.id_hash` is its primary key. Times are naive UTC `DateTime`; `events.data` is JSON. | The plan lists key columns only, not types. |
 | T2 | Check constraints: `workspace_members.role` in (admin, member); `auth_events.outcome` in (accepted, refused). `events.actor_id` is a nullable foreign key. | Keeps bad roles and outcomes out at the database level; system events have no actor. |
 | T2 | The database URL comes from `TASKBOARD_DATABASE_URL`, default `sqlite:////data/taskboard.db`. Tests set it to a temp file and pass temp URLs explicitly. | The Docker volume is mounted at `/data`; tests must never touch it. |
