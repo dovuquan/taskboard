@@ -294,7 +294,7 @@ def test_the_in_transaction_recheck_refuses_to_remove_the_last_admin(as_user, db
     finally:
         engine.dispose()
 
-    assert len(calls) >= 2
+    assert len(calls) == 2
     assert role_of(db_url, admin_id) == "admin"
     assert len(events(db_url)) == before
 
@@ -306,6 +306,7 @@ def test_a_stale_cached_role_writes_no_phantom_event(as_user, db_url):
     as_user("b@example.com", "sub-b", "admin")
     as_user("c@example.com", "sub-c", "admin")
     a_id, c_id = user_id(db_url, "a@example.com"), user_id(db_url, "c@example.com")
+    c_before = member_json(db_url, "c@example.com")
     engine = make_engine(db_url)
     try:
         with Session(engine) as session:
@@ -325,6 +326,7 @@ def test_a_stale_cached_role_writes_no_phantom_event(as_user, db_url):
     finally:
         engine.dispose()
 
+    assert member_json(db_url, "c@example.com") == {**c_before, "role": "member"}
     assert len(events(db_url)) == before
     assert query(db_url, lambda s: s.query(WorkspaceMember).filter_by(role="admin").count()) == 2
 
@@ -339,10 +341,9 @@ def test_an_actor_demoted_mid_request_cannot_change_roles(as_user, db_url):
     engine = make_engine(db_url)
     try:
         with Session(engine) as session:
-            cached = session.get(WorkspaceMember, b_id)  # keep a reference: the map is weak
-            assert cached.role == "admin"  # cached, now stale
 
             def demote(s):
+                # require_admin would have seen b as admin; now b is demoted
                 s.get(WorkspaceMember, b_id).role = "member"
                 s.commit()
 
@@ -366,7 +367,10 @@ def test_an_out_of_range_user_id_is_a_validation_error(as_user, db_url, bad_id):
     response = admin.patch(f"/api/members/{bad_id}", json={"role": "admin"})
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["path", "user_id"]
+    detail = response.json()["detail"]
+    assert len(detail) == 1
+    assert detail[0]["loc"] == ["path", "user_id"]
+    assert detail[0]["type"] == ("greater_than_equal" if bad_id == 0 else "less_than_equal")
     assert len(events(db_url)) == before
 
 
@@ -410,7 +414,10 @@ def test_a_bad_role_body_is_a_validation_error(as_user, db_url, body):
     response = admin.patch(f"/api/members/{bob_id}", json=body)
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "role"]
+    detail = response.json()["detail"]
+    assert len(detail) == 1
+    assert detail[0]["loc"] == ["body", "role"]
+    assert detail[0]["type"] == ("literal_error" if body else "missing")
     assert role_of(db_url, bob_id) == "member"
     assert len(events(db_url)) == before
 
