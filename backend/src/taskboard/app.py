@@ -1,5 +1,6 @@
 """FastAPI application: the JSON API plus the built web app."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,6 +12,8 @@ from sqlalchemy import text
 
 from taskboard import auth
 from taskboard.db import database_url, make_engine, run_migrations
+
+log = logging.getLogger(__name__)
 
 _REPO_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
@@ -37,7 +40,10 @@ def create_app(url: str | None = None) -> FastAPI:
         try:
             with app.state.engine.connect() as conn:
                 conn.execute(text("SELECT 1")).scalar_one()
-        except Exception:
+        except Exception as exc:
+            # Class name and the driver's own message only: no URL, no traceback.
+            cause = getattr(exc, "orig", None) or exc
+            log.warning("health check failed: %s: %s", type(exc).__name__, cause)
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
 
