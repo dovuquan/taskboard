@@ -74,7 +74,8 @@ class GoogleOidc:
                 },
                 timeout=10,
             )
-            token = response.json().get("id_token") if response.status_code == 200 else None
+            body = response.json() if response.status_code == 200 else None
+            token = body.get("id_token") if isinstance(body, dict) else None
         except (httpx.HTTPError, ValueError) as exc:
             raise TokenError("token endpoint unreachable") from exc
         if not isinstance(token, str):
@@ -331,21 +332,29 @@ def callback(
         return _refuse(db, "bad_token", None)
     try:
         sub, email = _check_claims(claims, flow["nonce"])
-        user = _resolve_user(db, sub, email, claims)
-        token = secrets.token_urlsafe(32)
-        db.add(
-            UserSession(
-                id_hash=_hash(token),
-                user_id=user.id,
-                expires_at=_now() + timedelta(days=SESSION_DAYS),
-            )
-        )
-        db.add(AuthEvent(email=email, outcome="accepted"))
-        db.commit()
     except _Refused as refused:
         return _refuse(db, refused.reason, refused.email)
-    except IntegrityError:
-        return _refuse(db, "email_conflict", claims.get("email"))
+    token = secrets.token_urlsafe(32)
+    for attempt in (1, 2):
+        try:
+            user = _resolve_user(db, sub, email, claims)
+            db.add(
+                UserSession(
+                    id_hash=_hash(token),
+                    user_id=user.id,
+                    expires_at=_now() + timedelta(days=SESSION_DAYS),
+                )
+            )
+            db.add(AuthEvent(email=email, outcome="accepted"))
+            db.commit()
+            break
+        except _Refused as refused:
+            return _refuse(db, refused.reason, refused.email)
+        except IntegrityError:
+            # A concurrent first sign-in can take the same id or email: retry once, then refuse.
+            db.rollback()
+            if attempt == 2:
+                return _refuse(db, "email_conflict", email)
     response = RedirectResponse("/boards", status_code=303)
     response.delete_cookie(FLOW_COOKIE)
     response.set_cookie(

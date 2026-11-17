@@ -285,7 +285,7 @@ def test_google_returning_an_error_is_refused_as_oauth_error(client, oidc, db_ur
     assert [e.reason for e in auth_events(db_url)] == ["oauth_error"]
 
 
-def test_a_flow_cookie_works_once(client, oidc, db_url):
+def test_the_callback_clears_the_flow_cookie(client, oidc, db_url):
     state, nonce = begin(client)
     oidc.claims = good_claims(nonce=nonce)
     ok = client.get("/auth/callback", params={"code": "c", "state": state}, follow_redirects=False)
@@ -433,3 +433,16 @@ def test_an_expired_session_is_reported_and_deleted(client, oidc, db_url):
     assert response.json() == {"detail": "session_expired"}
     assert query(db_url, lambda s: s.scalars(select(UserSession)).first()) is None
     assert client.get("/api/me").json() == {"detail": "not_signed_in"}
+
+
+def test_a_token_endpoint_answering_with_a_non_object_is_an_oauth_error(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return ["not", "an", "object"]
+
+    monkeypatch.setattr(auth.httpx, "post", lambda *a, **k: Response())
+
+    with pytest.raises(auth.TokenError):
+        auth.GoogleOidc().exchange("code", "verifier", "http://localhost:8000/auth/callback")
