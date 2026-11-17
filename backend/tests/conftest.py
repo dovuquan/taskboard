@@ -1,4 +1,9 @@
 import pytest
+from fastapi.testclient import TestClient
+from support import FakeOidc
+
+from taskboard import auth
+from taskboard.app import create_app
 
 
 @pytest.fixture
@@ -20,3 +25,21 @@ def _auth_settings(monkeypatch):
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-client-id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-client-secret")
     monkeypatch.setenv("SESSION_SECRET", "test-session-secret-of-some-length")
+
+
+@pytest.fixture
+def oidc():
+    return FakeOidc()
+
+
+@pytest.fixture
+def app(db_url, oidc):
+    app = create_app(db_url)
+    app.dependency_overrides[auth.get_oidc] = lambda: oidc
+    return app
+
+
+@pytest.fixture
+def client(app):
+    with TestClient(app, base_url="http://localhost:8000") as c:
+        yield c
