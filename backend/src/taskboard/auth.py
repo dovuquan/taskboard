@@ -397,6 +397,14 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     return user
 
 
+def require_admin(user: User = Depends(current_user), db: Session = Depends(get_db)) -> User:
+    """The signed-in user when they are a workspace admin, else a 403 `forbidden`."""
+    member = db.get(WorkspaceMember, user.id)
+    if member is None or member.role != "admin":
+        raise HTTPException(403, "forbidden")
+    return user
+
+
 @router.get("/api/me")
 def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     member = db.get(WorkspaceMember, user.id)

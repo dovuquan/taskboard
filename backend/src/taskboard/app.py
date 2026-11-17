@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from taskboard import auth
+from taskboard import auth, members
 from taskboard.db import database_url, make_engine, run_migrations
 
 log = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def create_app(url: str | None = None) -> FastAPI:
         return {"status": "ok"}
 
     app.include_router(auth.router)
+    app.include_router(members.router)
 
     web_dist = _web_dist()
     if web_dist.is_dir():
