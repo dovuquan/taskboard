@@ -50,11 +50,13 @@ The design reference: `design/` (prototype, `tokens.css`, `README.md` with the s
 
 ## Claude Code setup in this repo
 
-- Agents in `.claude/agents/` (read-only, they report and never edit):
-  - `planner`: turns the next milestone of the plan plus its prototype screens into an ordered
-    task list with tests first. Use before starting a milestone.
-  - `reviewer`: pre-PR review of the diff against the base branch and these rules.
-  - `security`: review of sign-in, sessions, roles and permissions, API input and secrets.
+- Agents come from the `product-flow` plugin (read-only, they report and never edit). Call them
+  by their full names; the repo keeps no copies in `.claude/agents/`:
+  - `product-flow:planner`: turns the next milestone of the plan plus its prototype screens into
+    an ordered task list with tests first. Use before starting a milestone.
+  - `product-flow:reviewer`: pre-PR review of the diff against the base branch and these rules.
+  - `product-flow:security`: review of sign-in, sessions, roles and permissions, API input and
+    secrets.
 - Hook `fmt-on-edit` (`.claude/hooks/fmt-on-edit.sh`): after every Edit/Write, formats the file
   (ruff for `backend/**/*.py`, prettier for `web/**`). It skips `design/` and never blocks.
 - Permissions (`.claude/settings.json`): tests, lint, formatting and read-only git run without a
