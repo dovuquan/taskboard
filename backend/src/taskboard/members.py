@@ -1,11 +1,11 @@
 """Workspace members: the list, role changes with the last-admin guard, and the refused feed."""
 
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from taskboard import auth
@@ -30,6 +30,14 @@ class LastAdmin(Exception):
 
 class OwnRole(Exception):
     """Admins cannot change their own role."""
+
+
+class NotAdmin(Exception):
+    """The acting user is no longer an admin."""
+
+
+class _AlreadyChanged(Exception):
+    """Another request changed this role first; nothing was written."""
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -70,21 +78,35 @@ def change_role(
     old = member.role
 
     def change(s: Session) -> None:
-        row = s.get(WorkspaceMember, user_id)
-        row.role = role
-        s.flush()
+        # The conditional UPDATE takes SQLite's write lock, so what follows sees committed state.
+        result = s.execute(
+            update(WorkspaceMember)
+            .where(WorkspaceMember.user_id == user_id, WorkspaceMember.role == old)
+            .values(role=role)
+        )
+        if result.rowcount == 0:
+            raise _AlreadyChanged
+        if actor_id is not None:
+            actor_role = s.scalar(
+                select(WorkspaceMember.role).where(WorkspaceMember.user_id == actor_id)
+            )
+            if actor_role != "admin":
+                raise NotAdmin
         if _admin_count(s) == 0:
             raise LastAdmin
 
-    record_change(
-        session,
-        change,
-        actor_id=actor_id,
-        kind="member.role_changed",
-        subject_type="user",
-        subject_id=str(user_id),
-        data={"from": old, "to": role},
-    )
+    try:
+        record_change(
+            session,
+            change,
+            actor_id=actor_id,
+            kind="member.role_changed",
+            subject_type="user",
+            subject_id=str(user_id),
+            data={"from": old, "to": role},
+        )
+    except _AlreadyChanged:
+        pass  # rolled back, no event; answer with the current state
     session.refresh(member)
     return member
 
@@ -101,7 +123,7 @@ def list_members(_user: User = Depends(current_user), db: Session = Depends(get_
 
 @router.patch("/api/members/{user_id}")
 def set_member_role(
-    user_id: int,
+    user_id: Annotated[int, Path(ge=1, le=2**63 - 1)],
     body: RoleBody,
     actor: User = Depends(require_admin),
     db: Session = Depends(get_db),
@@ -114,6 +136,8 @@ def set_member_role(
         raise HTTPException(409, "last_admin") from None
     except OwnRole:
         raise HTTPException(409, "own_role") from None
+    except NotAdmin:
+        raise HTTPException(403, "forbidden") from None
     return _member_out(db.get(User, user_id), member)
 
 

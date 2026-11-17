@@ -37,5 +37,7 @@ Each row says what was decided, why, and which ticket it came from.
 | T6 | An unchanged role answers 200 and writes no event (as the CLI does). The own-role rule applies even when the role is unchanged. | Idempotent and consistent with T5. |
 | T6 | `pending` is `google_sub` null; the list is ordered by email. Times are UTC ISO strings ending in `Z`. | Stable order for the web table; the database holds naive UTC. |
 | T6 | `GET /api/auth-events/refused` returns refused attempts with `at >= now - 7 days`, newest first, no limit, with the raw reason code (T7 maps it to text). | The plan names a 7-day feed; the code is the stable value. |
-| T6 | A user with no `workspace_members` row counts as a non-admin. The actor's admin status is checked once per request. | Fail closed. |
+| T6 | A user with no `workspace_members` row counts as a non-admin. The actor's admin status is checked on entry and again inside the transaction after the write lock is taken (403 `forbidden` if they were demoted meanwhile). | Fail closed; a demoted admin's in-flight request cannot change roles. |
+| T6 | Role changes use a conditional `UPDATE ... WHERE role = <old>`; if a concurrent request already made the change, nothing is written and the answer is 200 with the current state and no second event. | Stale reads cannot write a phantom `member.role_changed` event. |
+| T6 | `user_id` in `PATCH /api/members/{id}` must be 1..2^63-1; anything else is 422. | A huge id would overflow SQLite and give a 500. |
 | T6 | The last-admin rule is checked again inside the transaction after the write is flushed; SQLite's write lock serialises writers, so two admins cannot demote each other at once. `cli.py` is unchanged. | Closes the race without a new lock. |
