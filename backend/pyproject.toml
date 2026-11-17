@@ -6,6 +6,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.20.1",
     "fastapi",
+    "httpx>=0.28.1",
+    "pyjwt[crypto]>=2.15.1",
     "sqlalchemy>=2.1.8",
     "uvicorn",
 ]
@@ -15,7 +17,6 @@ taskboard = "taskboard.cli:main"
 
 [dependency-groups]
 dev = [
-    "httpx",
     "pytest",
     "ruff",
 ]
