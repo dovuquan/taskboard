@@ -1,6 +1,6 @@
 # Taskboard
 
-Training demo of a kanban app for the asnet.com.vn workspace. FastAPI + SQLite backend that also
+Training demo of a kanban app for a Google Workspace domain (`ALLOWED_HD`, `example.com` in the repo). FastAPI + SQLite backend that also
 serves a React/TypeScript web app. Runs locally with `docker compose up` at http://localhost:8000.
 
 The build plan (Claude Doc, the only spec): https://claude.ai/artifact/YHk8KfjB6T9zWz2uEqSyvd
@@ -13,7 +13,7 @@ The design reference: `design/` (prototype, `tokens.css`, `README.md` with the s
 - Tie-break: when demo simplicity and feature parity conflict, simplicity wins. The plan wins on
   data, permissions and limits; `design/` wins on look and interaction. Log every difference in
   `docs/assumptions.md`.
-- Sign-in is Google OIDC only. Accept only verified accounts with `hd == asnet.com.vn`. Identify
+- Sign-in is Google OIDC only. Accept only verified accounts with `hd == ALLOWED_HD` (the domain comes from `.env`; the repo says `example.com`). Identify
   people by Google `sub`. Log every attempt in `auth_events`.
 - Every state change writes an `events` row in the same transaction.
 - Roles: workspace admin/member; board owner/member/observer. Enforce them on the server and test

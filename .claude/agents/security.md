@@ -10,7 +10,7 @@ against real accounts, real Google endpoints or the network.
 Scope (read the diff against `git merge-base HEAD main`, plus the code it calls):
 
 - **Sign-in:** Google OIDC only; the ID token's signature, issuer, audience and expiry are
-  checked; `email_verified` is true and `hd == asnet.com.vn` (the claim, not the email suffix);
+  checked; `email_verified` is true and `hd == ALLOWED_HD` (the claim, not the email suffix);
   people are identified by `sub`; `state` and `nonce` are checked; every attempt, refused ones
   included, is written to `auth_events` without tokens or secrets.
 - **Sessions:** signed with `SESSION_SECRET`, HttpOnly, SameSite, Secure outside localhost;
