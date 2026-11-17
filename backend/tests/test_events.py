@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from taskboard.db import make_engine, run_migrations
@@ -86,7 +87,7 @@ def test_change_forced_to_fail_after_update_leaves_neither(session, db_url):
 
 
 def test_failing_event_insert_rolls_back_the_change(session, db_url):
-    with pytest.raises(Exception):  # noqa: B017 - foreign key violation on actor_id
+    with pytest.raises(IntegrityError):  # foreign key violation on actor_id
         record_change(
             session,
             set_role(2, "admin"),
