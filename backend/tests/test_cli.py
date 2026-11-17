@@ -149,7 +149,7 @@ def test_check_prints_integrity_and_schema_head(migrated, capsys):
 
 def test_check_on_an_unmigrated_database_fails(capsys):
     assert cli.main(["check"]) == 1
-    assert "schema: none" in capsys.readouterr().out
+    assert capsys.readouterr().out == "integrity: ok\nschema: none\n"
 
 
 def test_a_failing_write_leaves_neither_change_nor_event(migrated, monkeypatch):
