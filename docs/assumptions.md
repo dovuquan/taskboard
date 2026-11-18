@@ -49,10 +49,19 @@ Each row says what was decided, why, and which ticket it came from.
 | T7 | Missing files (paths under `/assets/` or with a file extension) stay 404; the server-prefix match (`api`, `auth`, `health`) is case-insensitive. | Stale tabs get a real error instead of HTML. |
 | T7 | The New board buttons are disabled with the hint "Arrives with M2". | Boards are an M2 feature. |
 | T7 | No gated banner on sign-in. | It needs a return-to value on `/auth/login`, which does not exist. |
-| T7 | The app bar has no Members link and no shortcuts button yet. | Members page and shortcuts come in later tickets. |
+| T7 | The app bar has no shortcuts button yet. (The "no Members link" part was superseded by T8: admins now see Members.) | Shortcuts come in a later ticket. |
 | T7 | Role labels are "Workspace admin" and "Workspace member". | Matches the prototype's role names and the plan's wording. |
 | T7 | The theme follows the OS (`prefers-color-scheme` in `tokens.css`); there is no in-app switch. | Simplicity wins over parity. |
 | T7 | Fonts load from a Google Fonts link (open font licence). No Tailwind or shadcn. | No new dependency. |
 | T7 | `design/tokens.css` is copied to `web/src/styles/tokens.css` because `.dockerignore` excludes `design/`; a backend test keeps the two files identical. | The Docker build cannot see `design/`. |
 | T7 | The whole-page error screen reads "This page could not be loaded because Taskboard isn't answering..." and its Try again button reloads the page. `#screen` (the `<main>`) is a flex column so centred screens fill the height. | The prototype's loadFail wording names the thing that failed; here that is the page. |
 | T7 | With no known domain, the refused page says "on your organisation's domain only" and "If you use your organisation's account...". | `/api/config` can fail or `ALLOWED_HD` can be unset. |
+| T8 | The app bar shows a Members link to admins only, active on `/members`; the breadcrumb follows the screen. This supersedes the T7 row about no Members link. | The prototype shows it for admins only; the server enforces the roles. |
+| T8 | A non-admin on `/members` sees the prototype's "Only workspace admins can see members" state, with "You are signed in as a workspace member." instead of the "View as" sentence, and no request is made. | The prototype's "View as" switch does not exist in the app. |
+| T8 | A role change waits for the server: no optimistic update and no confirm dialog. On success the returned row replaces the old one and a toast reads "X is now a workspace admin/member". On error the select stays on the old role and a toast shows the mapped text. | Simplicity wins; the last-admin and own-role messages come from the server's 409. |
+| T8 | A 401 while loading or saving reloads the page, which then shows the Expired screen. A 403 while saving shows the generic "That did not go through" toast; a 403 while loading shows the non-admin state. A 404 `member_not_found` also shows the generic toast. | Reuses the one place that decides between signed in, signed out and expired. |
+| T8 | Pending members show "Not yet" under Last active. Joined reads like "20 Oct", Last active "Today", "Yesterday" or the date; the year is added only when it differs from this year. Dates use the browser's local time. | Prototype wording, extended for real data. |
+| T8 | The refused feed is shown as the server returns it (7 days, newest first, no limit), as "Today 09:12", "Yesterday 14:05" or "13 Nov 07:00" in local time. A null email reads "Unknown account"; reason codes use the T7 texts. | The server may have no email for some failures. |
+| T8 | With no known domain the page says "a verified Google account from your organisation" and "their organisation's account". | `/api/config` can fail or `ALLOWED_HD` can be unset. |
+| T8 | A member without a name shows the email as the name, with no second line. Only one role save runs at a time. | Avoids a repeated email; keeps the page simple. |
+| T8 | No slow-load note, no "View as" strip, no shortcuts button, no theme switch, no limit on the refused feed. | Simplicity wins over parity. |

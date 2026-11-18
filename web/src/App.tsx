@@ -4,6 +4,7 @@ import { type Me, type MeResult, getConfig, getMe, getMemberCount } from "./api"
 import { AppBar } from "./components/AppBar";
 import { Boards } from "./pages/Boards";
 import { Expired } from "./pages/Expired";
+import { Members } from "./pages/Members";
 import { Refused } from "./pages/Refused";
 import { SignIn } from "./pages/SignIn";
 import { type Screen, resolveScreen } from "./routes";
@@ -20,7 +21,9 @@ export function AppView(props: AppViewProps) {
   const { screen, user } = props;
   return (
     <>
-      {screen === "boards" && user && <AppBar user={user} />}
+      {(screen === "boards" || screen === "members") && user && (
+        <AppBar user={user} screen={screen} />
+      )}
       <main id="screen">
         <Screen {...props} />
       </main>
@@ -28,7 +31,7 @@ export function AppView(props: AppViewProps) {
   );
 }
 
-function Screen({ screen, domain, reason, memberCount }: AppViewProps) {
+function Screen({ screen, domain, reason, memberCount, user }: AppViewProps) {
   switch (screen) {
     case "signin":
       return <SignIn domain={domain} />;
@@ -40,6 +43,8 @@ function Screen({ screen, domain, reason, memberCount }: AppViewProps) {
       return (
         <Boards domain={domain} memberCount={memberCount} />
       );
+    case "members":
+      return user && <Members me={user} domain={domain} />;
     case "error":
       return (
         <div className="page gutter">

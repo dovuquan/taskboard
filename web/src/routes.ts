@@ -1,6 +1,6 @@
 import type { MeResult } from "./api";
 
-export type Screen = "signin" | "refused" | "expired" | "boards" | "error";
+export type Screen = "signin" | "refused" | "expired" | "boards" | "members" | "error";
 
 export function resolveScreen(path: string, me: MeResult["kind"]): Screen {
   if (path === "/signin/refused") return "refused";
@@ -8,7 +8,7 @@ export function resolveScreen(path: string, me: MeResult["kind"]): Screen {
     case "error":
       return "error";
     case "user":
-      return "boards";
+      return path === "/members" ? "members" : "boards";
     case "expired":
       return path === "/signin" ? "signin" : "expired";
     case "signed_out":

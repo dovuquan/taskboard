@@ -29,6 +29,11 @@ const CASES: [string, Kind, Screen][] = [
   ["/", "signed_out", "signin"],
   ["/boards", "signed_out", "signin"],
   ["/nowhere", "signed_out", "signin"],
+
+  ["/members", "user", "members"],
+  ["/members", "error", "error"],
+  ["/members", "expired", "expired"],
+  ["/members", "signed_out", "signin"],
 ];
 
 describe("resolveScreen", () => {
