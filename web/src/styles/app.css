@@ -51,6 +51,7 @@ svg.i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor;
 .error { border-color: var(--danger); background: var(--danger-soft); }
 .error h2 { color: var(--danger); }
 
+.sub { margin: 4px 0 0; }
 .mono { font-family: var(--font-mono); font-size: 11px; letter-spacing: .02em; }
 .input, select.input { border: 1px solid var(--line); background: var(--surface); border-radius: var(--radius-s); padding: 6px 10px; min-width: 0; }
 .input:disabled { background: var(--surface-2); color: var(--muted); }

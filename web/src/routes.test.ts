@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MeResult } from "./api";
-import { type Screen, resolveScreen } from "./routes";
+import { type Screen, needsMemberCount, resolveScreen } from "./routes";
 
 type Kind = MeResult["kind"];
 
@@ -35,6 +35,15 @@ const CASES: [string, Kind, Screen][] = [
   ["/members", "expired", "expired"],
   ["/members", "signed_out", "signin"],
 ];
+
+describe("needsMemberCount", () => {
+  it("is true for the boards screen only", () => {
+    expect(needsMemberCount("boards")).toBe(true);
+    for (const s of ["members", "signin", "refused", "expired", "error"] as const) {
+      expect(needsMemberCount(s)).toBe(false);
+    }
+  });
+});
 
 describe("resolveScreen", () => {
   it.each(CASES)("%s with %s resolves to %s", (path, me, screen) => {

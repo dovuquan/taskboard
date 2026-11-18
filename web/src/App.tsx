@@ -7,7 +7,7 @@ import { Expired } from "./pages/Expired";
 import { Members } from "./pages/Members";
 import { Refused } from "./pages/Refused";
 import { SignIn } from "./pages/SignIn";
-import { type Screen, resolveScreen } from "./routes";
+import { type Screen, needsMemberCount, resolveScreen } from "./routes";
 
 type AppViewProps = {
   screen: Screen;
@@ -73,9 +73,9 @@ export function App() {
     void (async () => {
       const [domain, me]: [string | null, MeResult] = await Promise.all([getConfig(), getMe()]);
       const user = me.kind === "user" ? me.user : null;
-      const memberCount = user ? await getMemberCount() : null;
-      const reason = new URLSearchParams(window.location.search).get("reason");
       const screen = resolveScreen(window.location.pathname, me.kind);
+      const memberCount = user && needsMemberCount(screen) ? await getMemberCount() : null;
+      const reason = new URLSearchParams(window.location.search).get("reason");
       if (live) setState({ screen, domain, reason, user, memberCount });
     })();
     return () => {

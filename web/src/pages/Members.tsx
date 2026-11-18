@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   type Me,
@@ -11,15 +11,10 @@ import {
 } from "../api";
 import { refusalText } from "../auth/refusal";
 import { Avatar } from "../components/Avatar";
-import {
-  formatJoined,
-  formatLastActive,
-  formatWhen,
-  roleChangedText,
-  saveErrorText,
-} from "../members/text";
+import { type MembersApi, type MembersState, loadMembers, saveRole, shouldLoad } from "../members/logic";
+import { formatJoined, formatLastActive, formatWhen } from "../members/text";
 
-export type MembersState = "denied" | "loading" | "network" | "server" | "ready";
+const API: MembersApi = { getMembers, getRefused, setMemberRole };
 
 type ViewProps = {
   state: MembersState;
@@ -29,6 +24,7 @@ type ViewProps = {
   message: string | null;
   domain: string | null;
   now: Date;
+  saving?: boolean;
   onRole?: (id: number, role: Role) => void;
   onRetry?: () => void;
 };
@@ -39,7 +35,7 @@ function Head({ domain }: { domain: string | null }) {
     <div className="page-head">
       <div>
         <h1>Workspace members</h1>
-        <p className="muted lead">{text}</p>
+        <p className="muted sub">{text}</p>
       </div>
     </div>
   );
@@ -75,11 +71,13 @@ function LoadFailure({ kind, onRetry }: { kind: "network" | "server"; onRetry?: 
 function MemberRow({
   row,
   mine,
+  saving,
   now,
   onRole,
 }: {
   row: Member;
   mine: boolean;
+  saving: boolean;
   now: Date;
   onRole?: (id: number, role: Role) => void;
 }) {
@@ -100,7 +98,7 @@ function MemberRow({
           className="input"
           aria-label={`Workspace role for ${label}`}
           value={row.role}
-          disabled={mine}
+          disabled={mine || saving}
           title={mine ? "You cannot change your own role" : undefined}
           onChange={(e) => onRole?.(row.id, e.target.value as Role)}
         >
@@ -115,7 +113,7 @@ function MemberRow({
 }
 
 export function MembersView(props: ViewProps) {
-  const { state, me, rows, refused, message, domain, now, onRole, onRetry } = props;
+  const { state, me, rows, refused, message, domain, now, saving = false, onRole, onRetry } = props;
 
   if (state === "denied") {
     return (
@@ -161,7 +159,14 @@ export function MembersView(props: ViewProps) {
             </thead>
             <tbody>
               {rows.map((row) => (
-                <MemberRow key={row.id} row={row} mine={row.id === me.id} now={now} onRole={onRole} />
+                <MemberRow
+                  key={row.id}
+                  row={row}
+                  mine={row.id === me.id}
+                  saving={saving}
+                  now={now}
+                  onRole={onRole}
+                />
               ))}
             </tbody>
           </table>
@@ -237,7 +242,6 @@ type Loaded = {
 };
 
 export function Members({ me, domain }: { me: Me; domain: string | null }) {
-  const admin = me.role === "admin";
   const [load, setLoad] = useState<Loaded>({
     state: "loading",
     rows: [],
@@ -245,53 +249,46 @@ export function Members({ me, domain }: { me: Me; domain: string | null }) {
     now: new Date(),
   });
   const [attempt, setAttempt] = useState(0);
-  const [message, setMessage] = useState<string | null>(null);
-  const saving = useRef(false);
+  // Each toast has its own id, so showing the same text again restarts the timer.
+  const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!admin) return;
+    if (!shouldLoad(me)) return;
     let live = true;
-    void (async () => {
-      const [m, r] = await Promise.all([getMembers(), getRefused()]);
+    void loadMembers(API).then((out) => {
       if (!live) return;
-      if (m.kind === "expired" || r.kind === "expired") {
+      if (out.expired) {
         // The app shell shows the expired screen once /api/me says so.
         window.location.reload();
         return;
       }
-      if (m.kind === "ok" && r.kind === "ok") {
-        setLoad({ state: "ready", rows: m.data, refused: r.data, now: new Date() });
-      } else {
-        // A 403 means the admin was demoted since the page loaded.
-        const denied = m.kind === "forbidden" || r.kind === "forbidden";
-        const network = m.kind === "network" || r.kind === "network";
-        const state = denied ? "denied" : network ? "network" : "server";
-        setLoad({ state, rows: [], refused: [], now: new Date() });
-      }
-    })();
+      setLoad({ state: out.state, rows: out.rows, refused: out.refused, now: new Date() });
+    });
     return () => {
       live = false;
     };
-  }, [admin, attempt]);
+  }, [me, attempt]);
 
   useEffect(() => {
-    if (!message) return;
-    const timer = setTimeout(() => setMessage(null), 6000);
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 6000);
     return () => clearTimeout(timer);
-  }, [message]);
+  }, [toast]);
 
   async function onRole(id: number, role: Role) {
-    if (saving.current) return;
-    saving.current = true;
-    const res = await setMemberRole(id, role);
-    saving.current = false;
-    if (res.kind === "ok") {
-      setLoad((l) => ({ ...l, rows: l.rows.map((r) => (r.id === id ? res.data : r)) }));
-      setMessage(roleChangedText(res.data.name ?? res.data.email, res.data.role));
-    } else if (res.kind === "expired") {
+    if (saving) return;
+    setSaving(true);
+    const out = await saveRole(API, load.rows, id, role);
+    setSaving(false);
+    if (out.expired) {
       window.location.reload();
+    } else if (out.denied) {
+      setLoad((l) => ({ ...l, state: "denied" }));
     } else {
-      setMessage(saveErrorText(res.kind));
+      setLoad((l) => ({ ...l, rows: out.rows }));
+      const text = out.message;
+      if (text) setToast((t) => ({ text, id: (t?.id ?? 0) + 1 }));
     }
   }
 
@@ -302,13 +299,14 @@ export function Members({ me, domain }: { me: Me; domain: string | null }) {
 
   return (
     <MembersView
-      state={admin ? load.state : "denied"}
+      state={shouldLoad(me) ? load.state : "denied"}
       me={me}
       rows={load.rows}
       refused={load.refused}
-      message={message}
+      message={toast?.text ?? null}
       domain={domain}
       now={load.now}
+      saving={saving}
       onRole={(id, role) => void onRole(id, role)}
       onRetry={onRetry}
     />

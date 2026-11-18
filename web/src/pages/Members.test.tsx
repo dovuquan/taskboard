@@ -72,6 +72,11 @@ const HEAD =
   "Workspace members Anyone with a verified example.com Google account joins as a member on first sign-in. Board access is set on each board. ";
 const CLI =
   "The first admin is created from the command line (taskboard admin --email). Admins can promote others here. ";
+const TABLE =
+  "Person Workspace role Joined Last active " +
+  "AL Ann Lee ann@example.com Admin Member 20 Oct Today " +
+  "BT Bob Tran bob@example.com Admin Member 22 Oct Yesterday " +
+  "C cy@example.com Admin Member 5 Nov Not yet ";
 const FEED_EMPTY = "Refused sign-ins last 7 days No refused sign-ins in the last 7 days.";
 const SOLE =
   "You are the only admin. Make someone else an admin before you can step down; a workspace always keeps one admin. ";
@@ -131,31 +136,38 @@ describe("MembersView", () => {
 
   it("lists refused sign-ins as the server sent them", () => {
     const refused: Refusal[] = [
-      { at: at(11, 18, 9, 12), email: "minh.home@gmail.com", reason: "wrong_domain" },
+      { at: at(11, 18, 9, 12), email: "minh.home@example.net", reason: "wrong_domain" },
       { at: at(11, 17, 14, 5), email: null, reason: "oauth_error" },
     ];
-    const { text } = render({ refused });
-    expect(text.endsWith(
-      "Refused sign-ins last 7 days When Account Why it was refused " +
-        "Today 09:12 minh.home@gmail.com Not an example.com Workspace account " +
+    expect(render({ refused }).text).toBe(
+      HEAD +
+        TABLE +
+        SOLE +
+        CLI +
+        "Refused sign-ins last 7 days When Account Why it was refused " +
+        "Today 09:12 minh.home@example.net Not an example.com Workspace account " +
         "Yesterday 14:05 Unknown account Google sign-in was cancelled or did not finish",
-    )).toBe(true);
-    expect(text).not.toContain("No refused sign-ins");
+    );
   });
 
   it("shows the empty feed text", () => {
-    expect(render().text).toContain(FEED_EMPTY);
+    expect(render().text).toBe(HEAD + TABLE + SOLE + CLI + FEED_EMPTY);
   });
 
   it("shows a toast with the message", () => {
-    const { html, text } = render({
-      message: "A workspace needs at least one admin. Make someone else an admin first.",
-    });
+    const message = "A workspace needs at least one admin. Make someone else an admin first.";
+    const { html, text } = render({ message });
     expect(html).toContain('role="status"');
-    expect(text.endsWith(
-      "A workspace needs at least one admin. Make someone else an admin first.",
-    )).toBe(true);
+    expect(text).toBe(HEAD + TABLE + SOLE + CLI + FEED_EMPTY + " " + message);
     expect(render().html).not.toContain('role="status"');
+  });
+
+  it("disables every role select while a save is pending", () => {
+    const selects = render({ saving: true }).html.match(/<select[^>]*>/g) ?? [];
+    expect(selects).toHaveLength(3);
+    for (const s of selects) expect(s).toContain("disabled");
+    const bob = selects.find((s) => s.includes("Bob Tran")) ?? "";
+    expect(bob).not.toContain("title=");
   });
 
   it("shows the explanation for non-admins without a table", () => {
@@ -198,12 +210,13 @@ describe("MembersView", () => {
   });
 
   it("never renders null when the domain is unknown", () => {
-    const { text } = render({ domain: null, rows: [annRow] });
-    expect(text).not.toContain("null");
-    expect(text).not.toContain("example.com Google");
-    expect(text).toContain(
-      "Anyone with a verified Google account from your organisation joins as a member on first sign-in.",
+    expect(render({ domain: null, rows: [annRow] }).text).toBe(
+      "Workspace members Anyone with a verified Google account from your organisation joins as a member on first sign-in. Board access is set on each board. " +
+        "Person Workspace role Joined Last active " +
+        "AL Ann Lee ann@example.com Admin Member 20 Oct Today " +
+        "Nobody else has signed in yet. Colleagues appear here the first time they sign in with their organisation's account; there is nothing to send them. " +
+        CLI +
+        FEED_EMPTY,
     );
-    expect(text).toContain("with their organisation's account;");
   });
 });
