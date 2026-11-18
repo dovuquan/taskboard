@@ -43,3 +43,13 @@ Each row says what was decided, why, and which ticket it came from.
 | T6 | The last-admin rule is checked again inside the transaction after the conditional UPDATE; SQLite's write lock serialises writers, so two admins cannot demote each other at once. `cli.py` is unchanged. | Closes the race without a new lock. |
 | T7 | The server returns `index.html` for GET/HEAD paths outside `/api`, `/auth` and `/health` that match no file, with `Cache-Control: no-cache`. | Client routes such as `/boards` and `/signin/refused` must survive redirects and reloads. |
 | T7 | `GET /api/config` is public and returns only `{"allowed_hd": ...}` (null when unset). | The sign-in page shows the domain before anyone signs in, and the repo must never contain the real domain. |
+| T7 | Refusal wording for codes the prototype does not cover: `expired_token` "The sign-in took too long"; `oauth_error` "Google sign-in was cancelled or did not finish"; `bad_token` and `wrong_aud` "Google's answer could not be checked; nobody was signed in"; `email_conflict` "This email is already linked to another Google account"; any unknown code gives the generic "The sign-in did not go through". The raw code is never shown. | The prototype shows one reason only; the server emits ten codes. |
+| T7 | The refused page has no "You tried" email line. The server passes only the reason code in the redirect. | An email in a URL would leak into browser history and logs. |
+| T7 | Empty Boards: one workspace member gives the "Welcome to Taskboard" variant (the prototype's Just-installed tile), otherwise "No boards yet". The choice comes from the length of `GET /api/members`; if that call fails (a plain member gets 403) the page shows "No boards yet". | Boards arrive with M2; the member count is the only signal available now. |
+| T7 | The New board buttons are disabled with the hint "Arrives with M2". | Boards are an M2 feature. |
+| T7 | No gated banner on sign-in. | It needs a return-to value on `/auth/login`, which does not exist. |
+| T7 | The app bar has no Members link and no shortcuts button yet. | Members page and shortcuts come in later tickets. |
+| T7 | Role labels are "Workspace admin" and "Workspace member". | Matches the prototype's role names and the plan's wording. |
+| T7 | The theme follows the OS (`prefers-color-scheme` in `tokens.css`); there is no in-app switch. | Simplicity wins over parity. |
+| T7 | Fonts load from a Google Fonts link (open font licence). No Tailwind or shadcn. | No new dependency. |
+| T7 | `design/tokens.css` is copied to `web/src/styles/tokens.css` because `.dockerignore` excludes `design/`; a backend test keeps the two files identical. | The Docker build cannot see `design/`. |
