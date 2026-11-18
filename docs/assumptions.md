@@ -54,3 +54,5 @@ Each row says what was decided, why, and which ticket it came from.
 | T7 | The theme follows the OS (`prefers-color-scheme` in `tokens.css`); there is no in-app switch. | Simplicity wins over parity. |
 | T7 | Fonts load from a Google Fonts link (open font licence). No Tailwind or shadcn. | No new dependency. |
 | T7 | `design/tokens.css` is copied to `web/src/styles/tokens.css` because `.dockerignore` excludes `design/`; a backend test keeps the two files identical. | The Docker build cannot see `design/`. |
+| T7 | The whole-page error screen reads "This page could not be loaded because Taskboard isn't answering..." and its Try again button reloads the page; it has no red styling because the prototype defines none for `.empty.error`. `#screen` (the `<main>`) is a flex column so centred screens fill the height. | The prototype's loadFail wording names the thing that failed; here that is the page. |
+| T7 | With no known domain, the refused page says "on your organisation's domain only" and "If you use your organisation's account...". | `/api/config` can fail or `ALLOWED_HD` can be unset. |

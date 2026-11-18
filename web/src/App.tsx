@@ -16,7 +16,19 @@ type AppViewProps = {
   memberCount: number | null;
 };
 
-export function AppView({ screen, domain, reason, user, memberCount }: AppViewProps) {
+export function AppView(props: AppViewProps) {
+  const { screen, user } = props;
+  return (
+    <>
+      {screen === "boards" && user && <AppBar user={user} />}
+      <main id="screen">
+        <Screen {...props} />
+      </main>
+    </>
+  );
+}
+
+function Screen({ screen, domain, reason, memberCount }: AppViewProps) {
   switch (screen) {
     case "signin":
       return <SignIn domain={domain} />;
@@ -26,19 +38,20 @@ export function AppView({ screen, domain, reason, user, memberCount }: AppViewPr
       return <Expired />;
     case "boards":
       return (
-        <>
-          {user && <AppBar user={user} />}
-          <Boards domain={domain} memberCount={memberCount} />
-        </>
+        <Boards domain={domain} memberCount={memberCount} />
       );
     case "error":
       return (
-        <div className="center gutter">
+        <div className="page gutter">
           <div className="empty error">
-            <h2>Can't reach Taskboard. Try again in a moment.</h2>
-            <a className="btn" href="">
-              Reload
-            </a>
+            <h2>Can't reach Taskboard</h2>
+            <p>
+              This page could not be loaded because Taskboard isn't answering. Check your
+              connection, or ask an admin whether the server is running.
+            </p>
+            <button className="btn" type="button" onClick={() => window.location.reload()}>
+              Try again
+            </button>
           </div>
         </div>
       );

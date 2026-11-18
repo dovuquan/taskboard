@@ -7,6 +7,16 @@ export function initials(user: Pick<Me, "name" | "email">): string {
   return (user.email[0] ?? "?").toUpperCase();
 }
 
-export function Avatar({ user }: { user: Pick<Me, "name" | "email"> }) {
-  return <span className="avatar">{initials(user)}</span>;
+export function Avatar({
+  user,
+  large = false,
+}: {
+  user: Pick<Me, "name" | "email">;
+  large?: boolean;
+}) {
+  return (
+    <span className={large ? "avatar lg" : "avatar"} title={user.name ?? user.email}>
+      {initials(user)}
+    </span>
+  );
 }

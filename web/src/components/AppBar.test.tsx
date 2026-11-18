@@ -29,22 +29,33 @@ describe("AppBar", () => {
     expect(html).toMatch(/<a[^>]*href="\/boards"[^>]*>\s*Boards\s*<\/a>/);
   });
 
+  it("has a Breadcrumb nav between the brand and the spacer", () => {
+    const { html } = render(ann);
+    expect(html).toContain(
+      '</a><nav class="crumbs" aria-label="Breadcrumb"><span>/</span><span>Boards</span></nav><span class="spacer">',
+    );
+  });
+
+  it("titles the avatar with the name, or the email without one", () => {
+    expect(render(ann).html).toContain('<span class="avatar lg" title="Ann Lee">AL</span>');
+    expect(render({ ...ann, name: null, email: "zed@example.com" }).html).toContain(
+      'title="zed@example.com"',
+    );
+  });
+
   it("shows the name, initials and workspace admin label", () => {
     const { text } = render(ann);
-    expect(text).toContain("Ann Lee");
-    expect(text).toContain("AL");
-    expect(text).toContain("Workspace admin");
+    expect(text.trim()).toBe("Taskboard / Boards Boards AL Ann Lee Workspace admin");
   });
 
   it("shows the workspace member label for members", () => {
     const { text } = render({ ...ann, role: "member" });
-    expect(text).toContain("Workspace member");
-    expect(text).not.toContain("Workspace admin");
+    expect(text.trim()).toBe("Taskboard / Boards Boards AL Ann Lee Workspace member");
   });
 
   it("falls back to the email's first letter when there is no name", () => {
     const { text } = render({ ...ann, name: null, email: "zed@example.com" });
-    expect(text).toMatch(/(^|\s)Z(\s|$)/);
+    expect(text.trim()).toBe("Taskboard / Boards Boards Z zed@example.com Workspace admin");
   });
 
   it("has no Members link and no shortcuts button yet", () => {

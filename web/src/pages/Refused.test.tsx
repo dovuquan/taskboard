@@ -22,6 +22,17 @@ describe("Refused", () => {
     );
   });
 
+  it("uses grammatical sentences when the domain is unknown", () => {
+    const { text } = render("wrong_domain", null);
+    expect(text).toContain(
+      "Taskboard accepts verified Google Workspace accounts on your organisation's domain only.",
+    );
+    expect(text).toContain(
+      "If you use your organisation's account and still see this, ask a workspace admin to check it. This attempt was recorded.",
+    );
+    expect(text).not.toContain("null");
+  });
+
   it("shows the reason with a lower-cased first letter", () => {
     const { text } = render("wrong_domain");
     expect(text).toContain("Reason: not an example.com Workspace account");
