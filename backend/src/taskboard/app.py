@@ -29,8 +29,14 @@ _SERVER_PREFIXES = ("api", "auth", "health")
 
 
 def _is_server_path(path: str) -> bool:
-    first = path.strip("/").split("/", 1)[0]
-    return first in _SERVER_PREFIXES
+    first = path.replace("\\", "/").strip("/").split("/", 1)[0]
+    return first.lower() in _SERVER_PREFIXES
+
+
+def _is_file_path(path: str) -> bool:
+    """Paths under assets/ or ending in a file extension are files, never client routes."""
+    clean = path.replace("\\", "/").strip("/")
+    return clean.lower().startswith("assets/") or "." in clean.rsplit("/", 1)[-1]
 
 
 class _SpaStaticFiles(StaticFiles):
@@ -40,7 +46,7 @@ class _SpaStaticFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code != 404 or _is_server_path(path):
+            if exc.status_code != 404 or _is_server_path(path) or _is_file_path(path):
                 raise
             return FileResponse(
                 Path(self.directory) / "index.html",

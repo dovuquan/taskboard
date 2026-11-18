@@ -43,11 +43,27 @@ def test_unknown_api_paths_return_a_json_404(spa_client):
     assert response.headers["content-type"].startswith("application/json")
 
 
+@pytest.mark.parametrize("path", ["/API/me", "/Api/nope", "/api\\me", "/AUTH/nope", "/Health/x"])
+def test_server_prefix_match_ignores_case_and_backslashes(spa_client, path):
+    response = spa_client.get(path)
+
+    assert response.status_code == 404
+    assert response.text != INDEX_HTML
+
+
+@pytest.mark.parametrize("path", ["/assets/missing.js", "/favicon-missing.png"])
+def test_missing_files_stay_404_instead_of_the_index_page(spa_client, path):
+    response = spa_client.get(path)
+
+    assert response.status_code == 404
+    assert response.text != INDEX_HTML
+
+
 def test_unknown_auth_paths_do_not_fall_back_to_the_index_page(spa_client):
     response = spa_client.get("/auth/nope")
 
     assert response.status_code == 404
-    assert response.text != INDEX_HTML
+    assert response.json() == {"detail": "Not Found"}
 
 
 def test_health_is_not_shadowed_by_the_fallback(spa_client):
@@ -70,7 +86,7 @@ def test_path_traversal_never_leaves_the_web_folder(spa_client, path):
 def test_posting_to_a_client_route_is_refused(spa_client):
     response = spa_client.post("/boards")
 
-    assert response.status_code in (404, 405)
+    assert response.status_code == 405
 
 
 def test_config_returns_the_allowed_domain_without_a_session(client):
