@@ -41,3 +41,5 @@ Each row says what was decided, why, and which ticket it came from.
 | T6 | Role changes use a conditional `UPDATE ... WHERE role = <old>`; if a concurrent request already made the change, nothing is written and the answer is 200 with the current state and no second event. | Stale reads cannot write a phantom `member.role_changed` event. |
 | T6 | `user_id` in `PATCH /api/members/{id}` must be 1..2^63-1; anything else is 422. | A huge id would overflow SQLite and give a 500. |
 | T6 | The last-admin rule is checked again inside the transaction after the conditional UPDATE; SQLite's write lock serialises writers, so two admins cannot demote each other at once. `cli.py` is unchanged. | Closes the race without a new lock. |
+| T7 | The server returns `index.html` for GET/HEAD paths outside `/api`, `/auth` and `/health` that match no file, with `Cache-Control: no-cache`. | Client routes such as `/boards` and `/signin/refused` must survive redirects and reloads. |
+| T7 | `GET /api/config` is public and returns only `{"allowed_hd": ...}` (null when unset). | The sign-in page shows the domain before anyone signs in, and the repo must never contain the real domain. |
