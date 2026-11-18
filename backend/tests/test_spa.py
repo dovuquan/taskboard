@@ -20,7 +20,15 @@ def spa_client(tmp_path, db_url, monkeypatch):
         yield c
 
 
-@pytest.mark.parametrize("path", ["/boards", "/signin/refused?reason=wrong_domain", "/signin"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/boards",
+        "/members",
+        "/signin/refused?reason=wrong_domain",
+        "/signin",
+    ],
+)
 def test_client_routes_serve_the_index_page(spa_client, path):
     response = spa_client.get(path)
 

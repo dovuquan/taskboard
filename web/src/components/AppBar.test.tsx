@@ -12,8 +12,8 @@ const ann: Me = {
   role: "admin",
 };
 
-function render(user: Me) {
-  const html = renderToString(<AppBar user={user} />);
+function render(user: Me, screen?: "boards" | "members") {
+  const html = renderToString(<AppBar user={user} screen={screen} />);
   const text = html
     .replace(/<[^>]*>/g, " ")
     .replace(/&#x27;/g, "'")
@@ -45,7 +45,7 @@ describe("AppBar", () => {
 
   it("shows the name, initials and workspace admin label", () => {
     const { text } = render(ann);
-    expect(text.trim()).toBe("Taskboard / Boards Boards AL Ann Lee Workspace admin");
+    expect(text.trim()).toBe("Taskboard / Boards Boards Members AL Ann Lee Workspace admin");
   });
 
   it("shows the workspace member label for members", () => {
@@ -55,13 +55,31 @@ describe("AppBar", () => {
 
   it("falls back to the email's first letter when there is no name", () => {
     const { text } = render({ ...ann, name: null, email: "zed@example.com" });
-    expect(text.trim()).toBe("Taskboard / Boards Boards Z zed@example.com Workspace admin");
+    expect(text.trim()).toBe("Taskboard / Boards Boards Members Z zed@example.com Workspace admin");
   });
 
-  it("has no Members link and no shortcuts button yet", () => {
-    const { html, text } = render(ann);
+  it("links Members to /members for admins, with Boards active by default", () => {
+    const { html } = render(ann);
+    expect(html).toContain('<a class="navlink on" href="/boards">Boards</a>');
+    expect(html).toContain('<a class="navlink" href="/members">Members</a>');
+  });
+
+  it("has no Members link for members", () => {
+    const { html, text } = render({ ...ann, role: "member" });
     expect(text).not.toContain("Members");
     expect(html).not.toContain("/members");
-    expect(html.toLowerCase()).not.toContain("shortcuts");
+  });
+
+  it("marks Members active and follows the screen in the breadcrumb", () => {
+    const { html } = render(ann, "members");
+    expect(html).toContain('<a class="navlink" href="/boards">Boards</a>');
+    expect(html).toContain('<a class="navlink on" href="/members">Members</a>');
+    expect(html).toContain(
+      '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><span>Members</span></nav>',
+    );
+  });
+
+  it("has no shortcuts button yet", () => {
+    expect(render(ann).html.toLowerCase()).not.toContain("shortcuts");
   });
 });

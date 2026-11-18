@@ -57,7 +57,19 @@ describe("AppView", () => {
     expect(h1).toBe("Boards");
     expect(html).toMatch(/^<header class="appbar gutter">[\s\S]*<\/header><main id="screen">/);
     const bar = html.match(/<header[\s\S]*?<\/header>/)?.[0] ?? "";
-    expect(text(bar)).toBe("Taskboard / Boards Boards AL Ann Lee Workspace admin");
+    expect(text(bar)).toBe("Taskboard / Boards Boards Members AL Ann Lee Workspace admin");
+  });
+
+  it("renders the members screen with the app bar outside main", () => {
+    const { html, h1, text } = view("members", true);
+    expect(h1).toBe("Workspace members");
+    expect(html).toMatch(/^<header class="appbar gutter">[\s\S]*<\/header><main id="screen">/);
+    const bar = html.match(/<header[\s\S]*?<\/header>/)?.[0] ?? "";
+    expect(text(bar)).toBe("Taskboard / Members Boards Members AL Ann Lee Workspace admin");
+    expect(html).toContain('<a class="navlink on" href="/members">Members</a>');
+    expect(html.match(/<header/g)).toHaveLength(1);
+    expect(html.indexOf("<header")).toBeLessThan(html.indexOf("<main"));
+    expect(html.indexOf("Workspace members")).toBeGreaterThan(html.indexOf("<main"));
   });
 
   it("renders the error screen with a retry button", () => {

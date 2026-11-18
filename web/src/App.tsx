@@ -4,9 +4,10 @@ import { type Me, type MeResult, getConfig, getMe, getMemberCount } from "./api"
 import { AppBar } from "./components/AppBar";
 import { Boards } from "./pages/Boards";
 import { Expired } from "./pages/Expired";
+import { Members } from "./pages/Members";
 import { Refused } from "./pages/Refused";
 import { SignIn } from "./pages/SignIn";
-import { type Screen, resolveScreen } from "./routes";
+import { type Screen, needsMemberCount, resolveScreen } from "./routes";
 
 type AppViewProps = {
   screen: Screen;
@@ -20,7 +21,9 @@ export function AppView(props: AppViewProps) {
   const { screen, user } = props;
   return (
     <>
-      {screen === "boards" && user && <AppBar user={user} />}
+      {(screen === "boards" || screen === "members") && user && (
+        <AppBar user={user} screen={screen} />
+      )}
       <main id="screen">
         <Screen {...props} />
       </main>
@@ -28,7 +31,7 @@ export function AppView(props: AppViewProps) {
   );
 }
 
-function Screen({ screen, domain, reason, memberCount }: AppViewProps) {
+function Screen({ screen, domain, reason, memberCount, user }: AppViewProps) {
   switch (screen) {
     case "signin":
       return <SignIn domain={domain} />;
@@ -40,6 +43,8 @@ function Screen({ screen, domain, reason, memberCount }: AppViewProps) {
       return (
         <Boards domain={domain} memberCount={memberCount} />
       );
+    case "members":
+      return user && <Members me={user} domain={domain} />;
     case "error":
       return (
         <div className="page gutter">
@@ -68,9 +73,9 @@ export function App() {
     void (async () => {
       const [domain, me]: [string | null, MeResult] = await Promise.all([getConfig(), getMe()]);
       const user = me.kind === "user" ? me.user : null;
-      const memberCount = user ? await getMemberCount() : null;
-      const reason = new URLSearchParams(window.location.search).get("reason");
       const screen = resolveScreen(window.location.pathname, me.kind);
+      const memberCount = user && needsMemberCount(screen) ? await getMemberCount() : null;
+      const reason = new URLSearchParams(window.location.search).get("reason");
       if (live) setState({ screen, domain, reason, user, memberCount });
     })();
     return () => {
