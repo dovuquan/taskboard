@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getConfig, getMe, getMemberCount } from "./api";
+import {
+  getConfig,
+  getMe,
+  getMemberCount,
+  getMembers,
+  getRefused,
+  setMemberRole,
+} from "./api";
 
 const user = {
   id: 1,
@@ -82,6 +89,139 @@ describe("getConfig", () => {
       throw new TypeError("network down");
     });
     expect(await getConfig()).toBeNull();
+  });
+});
+
+const member = {
+  id: 2,
+  email: "bob@example.com",
+  name: "Bob Tran",
+  avatar_url: null,
+  role: "member",
+  joined_at: "2026-10-22T08:00:00Z",
+  last_seen_at: null,
+  pending: true,
+};
+
+function throwing() {
+  return stubFetch(async () => {
+    throw new TypeError("network down");
+  });
+}
+
+describe("getMembers", () => {
+  it("returns the rows on 200 and sends the session cookie", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [member]));
+    expect(await getMembers()).toEqual({ kind: "ok", data: [member] });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/members");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("reports a non-array body as a server problem", async () => {
+    stubFetch(async () => reply(200, { members: [] }));
+    expect(await getMembers()).toEqual({ kind: "server" });
+  });
+
+  it("reports an expired session on 401 session_expired", async () => {
+    stubFetch(async () => reply(401, { detail: "session_expired" }));
+    expect(await getMembers()).toEqual({ kind: "expired" });
+  });
+
+  it("reports forbidden on 403", async () => {
+    stubFetch(async () => reply(403, { detail: "forbidden" }));
+    expect(await getMembers()).toEqual({ kind: "forbidden" });
+  });
+
+  it("reports a server problem on 500", async () => {
+    stubFetch(async () => reply(500, { detail: "boom" }));
+    expect(await getMembers()).toEqual({ kind: "server" });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getMembers()).toEqual({ kind: "network" });
+  });
+});
+
+describe("getRefused", () => {
+  const feed = [{ at: "2026-11-18T09:12:00Z", email: null, reason: "wrong_domain" }];
+
+  it("returns the feed on 200", async () => {
+    const fetchMock = stubFetch(async () => reply(200, feed));
+    expect(await getRefused()).toEqual({ kind: "ok", data: feed });
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/auth-events/refused");
+  });
+
+  it("reports an expired session on 401", async () => {
+    stubFetch(async () => reply(401, { detail: "session_expired" }));
+    expect(await getRefused()).toEqual({ kind: "expired" });
+  });
+
+  it("reports forbidden on 403", async () => {
+    stubFetch(async () => reply(403, { detail: "forbidden" }));
+    expect(await getRefused()).toEqual({ kind: "forbidden" });
+  });
+
+  it("reports a server problem on 500", async () => {
+    stubFetch(async () => reply(500, {}));
+    expect(await getRefused()).toEqual({ kind: "server" });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getRefused()).toEqual({ kind: "network" });
+  });
+});
+
+describe("setMemberRole", () => {
+  it("sends the role as JSON and returns the updated row on 200", async () => {
+    const updated = { ...member, role: "admin" };
+    const fetchMock = stubFetch(async () => reply(200, updated));
+    expect(await setMemberRole(2, "admin")).toEqual({ kind: "ok", data: updated });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/members/2");
+    expect(init.method).toBe("PATCH");
+    expect(init.credentials).toBe("same-origin");
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+    expect(init.body).toBe('{"role":"admin"}');
+  });
+
+  it("reports an expired session on 401", async () => {
+    stubFetch(async () => reply(401, { detail: "session_expired" }));
+    expect(await setMemberRole(2, "admin")).toEqual({ kind: "expired" });
+  });
+
+  it("reports forbidden on 403", async () => {
+    stubFetch(async () => reply(403, { detail: "forbidden" }));
+    expect(await setMemberRole(2, "admin")).toEqual({ kind: "forbidden" });
+  });
+
+  it("reports last_admin on 409 last_admin", async () => {
+    stubFetch(async () => reply(409, { detail: "last_admin" }));
+    expect(await setMemberRole(1, "member")).toEqual({ kind: "last_admin" });
+  });
+
+  it("reports own_role on 409 own_role", async () => {
+    stubFetch(async () => reply(409, { detail: "own_role" }));
+    expect(await setMemberRole(1, "member")).toEqual({ kind: "own_role" });
+  });
+
+  it("reports a server problem on an unknown 409", async () => {
+    stubFetch(async () => reply(409, { detail: "other" }));
+    expect(await setMemberRole(1, "member")).toEqual({ kind: "server" });
+  });
+
+  it("reports a server problem on 404 and 500", async () => {
+    stubFetch(async () => reply(404, { detail: "member_not_found" }));
+    expect(await setMemberRole(9, "admin")).toEqual({ kind: "server" });
+    stubFetch(async () => reply(500, {}));
+    expect(await setMemberRole(2, "admin")).toEqual({ kind: "server" });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await setMemberRole(2, "admin")).toEqual({ kind: "network" });
   });
 });
 
