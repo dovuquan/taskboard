@@ -6,12 +6,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from taskboard import auth, members
 from taskboard.db import database_url, make_engine, run_migrations
+from taskboard.settings import allowed_hd
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +22,36 @@ _REPO_WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
 
 def _web_dist() -> Path:
     return Path(os.environ.get("TASKBOARD_WEB_DIST", _REPO_WEB_DIST))
+
+
+# Paths that belong to the server; an unknown one stays a 404 instead of the web page.
+_SERVER_PREFIXES = ("api", "auth", "health")
+
+
+def _is_server_path(path: str) -> bool:
+    first = path.replace("\\", "/").strip("/").split("/", 1)[0]
+    return first.lower() in _SERVER_PREFIXES
+
+
+def _is_file_path(path: str) -> bool:
+    """Paths under assets/ or ending in a file extension are files, never client routes."""
+    clean = path.replace("\\", "/").strip("/")
+    return clean.lower().startswith("assets/") or "." in clean.rsplit("/", 1)[-1]
+
+
+class _SpaStaticFiles(StaticFiles):
+    """Serve real files; unknown client routes get the one fixed index.html."""
+
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or _is_server_path(path) or _is_file_path(path):
+                raise
+            return FileResponse(
+                Path(self.directory) / "index.html",
+                headers={"Cache-Control": "no-cache"},
+            )
 
 
 def create_app(url: str | None = None) -> FastAPI:
@@ -47,12 +79,17 @@ def create_app(url: str | None = None) -> FastAPI:
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
 
+    @app.get("/api/config")
+    def public_config():
+        # Public on purpose: the sign-in page shows the domain before anyone signs in.
+        return {"allowed_hd": allowed_hd()}
+
     app.include_router(auth.router)
     app.include_router(members.router)
 
     web_dist = _web_dist()
     if web_dist.is_dir():
-        app.mount("/", StaticFiles(directory=web_dist, html=True), name="web")
+        app.mount("/", _SpaStaticFiles(directory=web_dist, html=True), name="web")
 
     return app
 
