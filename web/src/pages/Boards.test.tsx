@@ -10,7 +10,8 @@ function render(memberCount: number | null, domain: string | null = "example.com
     .replace(/&#x27;/g, "'")
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
   return { html, text };
 }
 
@@ -21,6 +22,24 @@ function disabledButtons(html: string): string[] {
 }
 
 describe("Boards", () => {
+  it("has exactly this text for the welcome variant", () => {
+    expect(render(1).text).toBe(
+      "Boards example.com workspace New board " +
+        "Welcome to Taskboard " +
+        "You're the first one here. Create a board for a project or team; colleagues join the workspace the first time they sign in with their example.com account. " +
+        "Create the first board",
+    );
+  });
+
+  it("has exactly this text for the empty variant", () => {
+    expect(render(2).text).toBe(
+      "Boards example.com workspace New board " +
+        "No boards yet " +
+        'A board holds lists of cards for one project or team. Create the first one, for example "Q4 Launch". ' +
+        "New board",
+    );
+  });
+
   it("shows the heading and the workspace subtitle", () => {
     const { text } = render(2);
     expect(text).toContain("Boards");

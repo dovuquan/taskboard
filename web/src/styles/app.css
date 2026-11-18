@@ -2,7 +2,7 @@
 html, body, #root { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 400 14px/1.45 var(--font-body); }
 #root { display: flex; flex-direction: column; }
-#screen { flex: 1; display: flex; flex-direction: column; }
+#screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; letter-spacing: -.01em; }
 h1 { font-size: 24px; } h2 { font-size: 18px; }
 button, input { font: inherit; color: inherit; }
@@ -48,6 +48,8 @@ svg.i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor;
 
 .empty { background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius-l); padding: var(--s6) var(--s5); text-align: center; display: flex; flex-direction: column; gap: var(--s3); align-items: center; }
 .empty p { margin: 0; color: var(--muted); max-width: 46ch; }
+.error { border-color: var(--danger); background: var(--danger-soft); }
+.error h2 { color: var(--danger); }
 
 @media (max-width: 760px) {
   .me small { display: none; }

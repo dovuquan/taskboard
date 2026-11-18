@@ -8,7 +8,14 @@ describe("Expired", () => {
   const text = html
     .replace(/<[^>]*>/g, " ")
     .replace(/&#x27;/g, "'")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
+
+  it("has exactly this text", () => {
+    expect(text).toBe(
+      "Your session has ended Taskboard signs you out after 14 days. Sign in again to carry on. Nothing you saved is lost. Sign in again with Google",
+    );
+  });
 
   it("explains that the session ended", () => {
     expect(text).toContain("Your session has ended");

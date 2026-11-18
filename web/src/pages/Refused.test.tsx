@@ -9,11 +9,41 @@ function render(reason: string | null, domain: string | null = "example.com") {
     .replace(/<[^>]*>/g, " ")
     .replace(/&#x27;/g, "'")
     .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
   return { html, text };
 }
 
+const FINE_TAIL = "ask a workspace admin to check it. This attempt was recorded.";
+
 describe("Refused", () => {
+  it("has exactly this text with a domain", () => {
+    expect(render("wrong_domain").text).toBe(
+      "We couldn't sign you in Taskboard accepts verified Google Workspace accounts on example.com only. " +
+        "Reason: not an example.com Workspace account " +
+        "Try another account " +
+        `If you use an example.com account and still see this, ${FINE_TAIL}`,
+    );
+  });
+
+  it("has exactly this text without a domain", () => {
+    expect(render("wrong_domain", null).text).toBe(
+      "We couldn't sign you in Taskboard accepts verified Google Workspace accounts on your organisation's domain only. " +
+        "Reason: not a Workspace account of the allowed domain " +
+        "Try another account " +
+        `If you use your organisation's account and still see this, ${FINE_TAIL}`,
+    );
+  });
+
+  it("has exactly this text for a hostile reason", () => {
+    expect(render("<script>alert(1)</script>").text).toBe(
+      "We couldn't sign you in Taskboard accepts verified Google Workspace accounts on example.com only. " +
+        "Reason: the sign-in did not go through " +
+        "Try another account " +
+        `If you use an example.com account and still see this, ${FINE_TAIL}`,
+    );
+  });
+
   it("shows the heading and the domain rule", () => {
     const { text } = render("wrong_domain");
     expect(text).toContain("We couldn't sign you in");

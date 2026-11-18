@@ -9,11 +9,27 @@ function render(domain: string | null) {
     .replace(/<[^>]*>/g, " ")
     .replace(/&#x27;/g, "'")
     .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ");
+    .replace(/\s+/g, " ")
+    .trim();
   return { html, text };
 }
 
+const FIRST_TIME =
+  "First time here? You join the workspace as a member the first time you sign in. Personal Gmail accounts are not accepted.";
+
 describe("SignIn", () => {
+  it("has exactly this text with a domain", () => {
+    expect(render("example.com").text).toBe(
+      `Taskboard Sign in Use your example.com Google Workspace account. Continue with Google ${FIRST_TIME}`,
+    );
+  });
+
+  it("has exactly this text without a domain", () => {
+    expect(render(null).text).toBe(
+      `Taskboard Sign in Use your Google Workspace account. Continue with Google ${FIRST_TIME}`,
+    );
+  });
+
   it("shows the heading and the domain line", () => {
     const { text } = render("example.com");
     expect(text).toContain("Sign in");
