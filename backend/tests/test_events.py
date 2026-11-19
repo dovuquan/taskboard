@@ -116,17 +116,62 @@ def test_two_changes_write_two_events(session, db_url):
         assert [e.subject_id for e in fresh.scalars(select(Event).order_by(Event.id))] == ["2", "1"]
 
 
-def test_data_defaults_to_empty_and_pending_work_is_refused(session, db_url):
+def test_data_defaults_to_empty(session, db_url):
     record_change(
         session, lambda s: None, actor_id=None, kind="x.y", subject_type="t", subject_id="1"
     )
     with Session(make_engine(db_url)) as fresh:
         assert fresh.scalar(select(Event.data)) == {}
 
-    session.get(WorkspaceMember, 2).role = "admin"  # uncommitted work by someone else
-    with pytest.raises(RuntimeError):
+
+def _add(s: Session) -> None:
+    s.add(User(id=50, email="carol@example.com"))
+
+
+def _modify(s: Session) -> None:
+    s.get(WorkspaceMember, 2).role = "admin"
+
+
+def _delete(s: Session) -> None:
+    s.delete(s.get(WorkspaceMember, 2))
+
+
+def snapshot(db_url) -> tuple:
+    with Session(make_engine(db_url)) as fresh:
+        return (
+            fresh.scalar(select(func.count()).select_from(User)),
+            fresh.scalars(select(WorkspaceMember.role).order_by(WorkspaceMember.user_id)).all(),
+            fresh.scalar(select(func.count()).select_from(Event)),
+        )
+
+
+@pytest.mark.parametrize("pending", [_add, _modify, _delete], ids=["add", "modify", "delete"])
+@pytest.mark.parametrize("flushed", [False, True], ids=["unflushed", "flushed"])
+def test_uncommitted_work_is_refused_and_nothing_is_committed(session, db_url, pending, flushed):
+    before = snapshot(db_url)
+    pending(session)  # uncommitted work that did not go through record_change
+    if flushed:
+        session.flush()
+
+    with pytest.raises(RuntimeError, match="no pending changes"):
         record_change(
             session, lambda s: None, actor_id=1, kind="x.y", subject_type="t", subject_id="2"
         )
+
     session.rollback()
-    assert role_of(db_url, 2) == "member"
+    assert snapshot(db_url) == before
+
+
+def test_session_is_usable_again_after_a_rollback_or_a_commit(session, db_url):
+    _add(session)
+    session.flush()
+    session.rollback()
+    record_change(session, _modify, actor_id=1, kind="x.y", subject_type="t", subject_id="2")
+
+    _add(session)
+    session.flush()
+    session.commit()
+    record_change(session, _delete, actor_id=1, kind="x.z", subject_type="t", subject_id="2")
+
+    with Session(make_engine(db_url)) as fresh:
+        assert [e.kind for e in fresh.scalars(select(Event).order_by(Event.id))] == ["x.y", "x.z"]
