@@ -15,6 +15,9 @@ from taskboard.models import AuthEvent, User, WorkspaceMember
 
 router = APIRouter()
 
+# Anyone can add refused rows without signing in, so the admin feed returns only the newest ones.
+REFUSED_FEED_LIMIT = 200
+
 
 class RoleBody(BaseModel):
     role: Literal["admin", "member"]
@@ -148,5 +151,6 @@ def refused_sign_ins(_admin: User = Depends(require_admin), db: Session = Depend
         select(AuthEvent)
         .where(AuthEvent.outcome == "refused", AuthEvent.at >= since)
         .order_by(AuthEvent.at.desc(), AuthEvent.id.desc())
+        .limit(REFUSED_FEED_LIMIT)
     ).all()
     return [{"at": _iso(row.at), "email": row.email, "reason": row.reason} for row in rows]
