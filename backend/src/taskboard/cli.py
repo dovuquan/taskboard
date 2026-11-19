@@ -9,7 +9,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, func, make_url, select, text
-from sqlalchemy.exc import DatabaseError
+from sqlalchemy.exc import DatabaseError, IntegrityError
 from sqlalchemy.orm import Session
 
 from taskboard.db import _MIGRATIONS, database_url, make_engine, run_migrations
@@ -39,6 +39,12 @@ def _require_domain() -> str | None:
     if domain is None:
         print("error: ALLOWED_HD is not set (see .env.example)", file=sys.stderr)
     return domain
+
+
+def _concurrent_change() -> int:
+    """Another writer took the same id or email first; record_change already rolled back."""
+    print("error: concurrent change, run again", file=sys.stderr)
+    return 1
 
 
 def _next_user_id(session: Session) -> int:
@@ -113,6 +119,8 @@ def cmd_admin(args: argparse.Namespace) -> int:
             )
             print(f"{email} is now an admin")
             return 0
+    except IntegrityError:
+        return _concurrent_change()
     finally:
         engine.dispose()
 
@@ -130,6 +138,8 @@ def cmd_seed(_args: argparse.Namespace) -> int:
                 if session.scalar(select(User.id).where(User.email == email)) is None:
                     _add_member(session, email, "member", name)
                     added += 1
+    except IntegrityError:
+        return _concurrent_change()
     finally:
         engine.dispose()
     print(f"seeded {added} new member(s)")

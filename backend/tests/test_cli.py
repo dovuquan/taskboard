@@ -143,6 +143,26 @@ def test_seed_adds_five_members_once(migrated):
     assert [e.kind for e in events(migrated)] == ["member.added"] * 5
 
 
+@pytest.mark.parametrize(
+    "argv", [["admin", "--email", "new@example.com"], ["seed"]], ids=["admin", "seed"]
+)
+def test_a_clashing_user_id_is_reported_without_a_traceback(migrated, monkeypatch, capsys, argv):
+    # Someone else took the id between the read of max(id) and the write.
+    assert cli.main(["admin", "--email", "first@example.com"]) == 0
+    taken = user_by_email(migrated, "first@example.com").id
+    monkeypatch.setattr(cli, "_next_user_id", lambda _session: taken)
+    capsys.readouterr()
+
+    assert cli.main(argv) == 1
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert out.err == "error: concurrent change, run again\n"
+    assert [u.email for u in query(migrated, lambda s: list(s.scalars(select(User))))] == [
+        "first@example.com"
+    ]
+    assert len(events(migrated)) == 1
+
+
 def test_check_prints_integrity_and_schema_head(migrated, capsys):
     capsys.readouterr()
     assert cli.main(["check"]) == 0
