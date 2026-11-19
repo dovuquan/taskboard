@@ -113,7 +113,20 @@ def test_admin_works_after_the_person_signs_in(migrated):
     assert events(migrated)[-1].kind == "member.role_changed"
 
 
-@pytest.mark.parametrize("email", ["x@gmail.com", "nobody", "x@example.com.evil.com", ""])
+@pytest.mark.parametrize(
+    "email",
+    [
+        "x@gmail.com",
+        "nobody",
+        "x@example.com.evil.com",
+        "",
+        "a b@example.com",
+        "a\tb@example.com",
+        "a@b@example.com",
+        "<x>@example.com",
+        'x"y@example.com',
+    ],
+)
 def test_admin_refuses_an_email_outside_the_workspace(migrated, email):
     assert cli.main(["admin", "--email", email]) == 2
     assert events(migrated) == []

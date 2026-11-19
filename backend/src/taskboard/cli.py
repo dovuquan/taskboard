@@ -1,6 +1,7 @@
 """The `taskboard` command line: set up the database and the first admin."""
 
 import argparse
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -26,10 +27,14 @@ SEED_PEOPLE = [
 ]
 
 
+# A simple safe set for the part before "@"; anything else cannot be a workspace account.
+_LOCAL_PART = re.compile(r"[a-z0-9._%+-]+")
+
+
 def _valid_email(raw: str, domain_name: str) -> str | None:
     email = raw.strip().lower()
     local, _, domain = email.partition("@")
-    if local and domain == domain_name:
+    if _LOCAL_PART.fullmatch(local) and domain == domain_name:
         return email
     return None
 
