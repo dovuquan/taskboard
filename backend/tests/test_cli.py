@@ -82,6 +82,26 @@ def test_admin_promotes_an_existing_member(migrated):
     assert event.data == {"from": "member", "to": "admin"}
 
 
+def test_admin_adds_the_member_row_for_a_user_without_one(migrated, capsys):
+    def add(s):
+        s.add(User(id=9, email="nomember@example.com", google_sub="sub-9"))
+        s.commit()
+
+    query(migrated, add)
+
+    assert cli.main(["admin", "--email", "nomember@example.com"]) == 0
+    assert capsys.readouterr().out == "nomember@example.com is now an admin\n"
+    assert role_of(migrated, "nomember@example.com") == "admin"
+    [event] = events(migrated)
+    assert (event.kind, event.actor_id, event.subject_type, event.subject_id) == (
+        "member.role_changed",
+        None,
+        "user",
+        "9",
+    )
+    assert event.data == {"from": None, "to": "admin"}
+
+
 def test_admin_again_changes_nothing(migrated, capsys):
     cli.main(["admin", "--email", "x@example.com"])
     capsys.readouterr()
