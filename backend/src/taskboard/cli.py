@@ -1,15 +1,18 @@
 """The `taskboard` command line: set up the database and the first admin."""
 
 import argparse
+import sqlite3
 import sys
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import func, select, text
+from sqlalchemy import create_engine, func, make_url, select, text
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import Session
 
-from taskboard.db import _MIGRATIONS, make_engine, run_migrations
+from taskboard.db import _MIGRATIONS, database_url, make_engine, run_migrations
 from taskboard.events import record_change
 from taskboard.models import User, WorkspaceMember
 from taskboard.settings import allowed_hd
@@ -137,7 +140,13 @@ def cmd_check(_args: argparse.Namespace) -> int:
     config = Config()
     config.set_main_option("script_location", str(_MIGRATIONS))
     head = ScriptDirectory.from_config(config).get_current_head()
-    engine = make_engine()
+    path = Path(make_url(database_url()).database or "")
+    if not path.is_file():
+        print("integrity: database file not found")
+        return 1
+    # Read-only and without make_engine's pragmas, so the check never creates or changes a file.
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    engine = create_engine("sqlite://", creator=lambda: sqlite3.connect(uri, uri=True))
     try:
         with engine.connect() as conn:
             problems = [r[0] for r in conn.execute(text("PRAGMA integrity_check"))]
@@ -147,6 +156,9 @@ def cmd_check(_args: argparse.Namespace) -> int:
                 for r in conn.execute(text("PRAGMA foreign_key_check"))
             ]
             current = MigrationContext.configure(conn).get_current_revision()
+    except DatabaseError as error:
+        print(f"integrity: {error.orig}")
+        return 1
     finally:
         engine.dispose()
     for problem in problems:

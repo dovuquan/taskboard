@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import subprocess
+from pathlib import Path
 
 import pytest
 from sqlalchemy import func, select
@@ -148,9 +149,48 @@ def test_check_prints_integrity_and_schema_head(migrated, capsys):
     assert capsys.readouterr().out == "integrity: ok\nschema: 0001 (head)\n"
 
 
+def default_db_path() -> Path:
+    return Path(os.environ["TASKBOARD_DATABASE_URL"].removeprefix("sqlite:///"))
+
+
 def test_check_on_an_unmigrated_database_fails(capsys):
+    sqlite3.connect(default_db_path()).close()  # an empty SQLite database
+
     assert cli.main(["check"]) == 1
     assert capsys.readouterr().out == "integrity: ok\nschema: none\n"
+
+
+def test_check_on_a_missing_database_fails_without_creating_it(capsys):
+    path = default_db_path()
+
+    assert cli.main(["check"]) == 1
+    out = capsys.readouterr()
+    assert out.out == "integrity: database file not found\n"
+    assert out.err == ""
+    assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(path.name)) == []
+
+
+def test_check_on_a_file_that_is_not_a_database_reports_it(capsys):
+    path = default_db_path()
+    path.write_bytes(b"not a database, just some text that is long enough\n" * 4)
+    before = path.read_bytes()
+
+    assert cli.main(["check"]) == 1
+    out = capsys.readouterr()
+    assert out.out == "integrity: file is not a database\n"
+    assert out.err == ""
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in path.parent.iterdir() if p.name.startswith(path.name)) == [
+        path.name
+    ]
+
+
+def test_check_leaves_a_migrated_database_unchanged(migrated, capsys):
+    path = Path(migrated.removeprefix("sqlite:///"))
+    before = path.read_bytes()
+
+    assert cli.main(["check"]) == 0
+    assert path.read_bytes() == before
 
 
 def raw_sqlite(db_url, sql):
