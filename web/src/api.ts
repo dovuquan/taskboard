@@ -29,6 +29,15 @@ export async function getMe(): Promise<MeResult> {
   }
 }
 
+/** Ends the session. Never throws: the caller leaves for Sign in either way. */
+export async function signOut(): Promise<void> {
+  try {
+    await fetch("/auth/logout", { ...INIT, method: "POST" });
+  } catch {
+    // Offline or refused: the cookie will expire; Sign in is still the right next screen.
+  }
+}
+
 export async function getConfig(): Promise<string | null> {
   try {
     const res = await fetch("/api/config", INIT);

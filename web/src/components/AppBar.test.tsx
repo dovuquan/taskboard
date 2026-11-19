@@ -2,7 +2,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { Me } from "../api";
-import { AppBar } from "./AppBar";
+import { AppBar, AppBarView } from "./AppBar";
 
 const ann: Me = {
   id: 1,
@@ -81,5 +81,30 @@ describe("AppBar", () => {
 
   it("has no shortcuts button yet", () => {
     expect(render(ann).html.toLowerCase()).not.toContain("shortcuts");
+  });
+
+  it("makes the avatar and name a closed account menu button", () => {
+    const { html } = render(ann);
+    expect(html).toMatch(
+      /<button[^>]*class="me"[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"[^>]*aria-label="Account menu for Ann Lee"/,
+    );
+    expect(html).not.toContain('role="menu"');
+    expect(html).not.toContain("Sign out");
+  });
+
+  it("shows Sign out in the open menu", () => {
+    const html = renderToString(
+      <AppBarView
+        user={ann}
+        screen="boards"
+        open
+        onToggle={() => {}}
+        onSignOut={() => {}}
+      />,
+    );
+    expect(html).toMatch(/aria-expanded="true"[^>]*aria-controls="account-menu"/);
+    expect(html).toMatch(
+      /<div[^>]*id="account-menu"[^>]*role="menu"[^>]*>[\s\S]*<button[^>]*role="menuitem"[^>]*>[\s\S]*Sign out[\s\S]*<\/button>/,
+    );
   });
 });

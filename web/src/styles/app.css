@@ -26,7 +26,13 @@ svg.i { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor;
 .mark { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2px; padding: 4px; }
 .mark i { background: var(--accent-fg); border-radius: 1px; opacity: .9; }
 .mark i:nth-child(1) { height: 100%; } .mark i:nth-child(2) { height: 65%; } .mark i:nth-child(3) { height: 40%; }
-.me { display: inline-flex; align-items: center; gap: 8px; }
+.me-wrap { position: relative; }
+.me { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; padding: 2px 6px 2px 2px; border-radius: var(--radius-m); cursor: pointer; text-align: left; }
+.me:hover, .me[aria-expanded="true"] { background: var(--surface-2); }
+.pop { position: absolute; z-index: 60; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); box-shadow: var(--shadow-2); padding: 6px; min-width: 210px; display: flex; flex-direction: column; gap: 2px; }
+.pop .item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-s); border: 0; background: transparent; text-align: left; cursor: pointer; width: 100%; }
+.pop .item:hover { background: var(--surface-2); }
+.account-menu { right: 0; top: calc(100% + 6px); min-width: 160px; }
 .me small { display: block; color: var(--muted); font-size: 12px; line-height: 1.2; }
 .navlink { color: var(--fg); text-decoration: none; padding: 4px 8px; border-radius: var(--radius-s); }
 .navlink:hover, .navlink.on { background: var(--surface-2); }
