@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from support import auth_events, events, good_claims, query, sign_in, user_by_email
 
 from taskboard.db import make_engine
+from taskboard.members import REFUSED_FEED_LIMIT
 from taskboard.models import AuthEvent, User, UserSession, WorkspaceMember
 
 
@@ -501,3 +502,29 @@ def test_an_admin_sees_refused_sign_ins_of_the_last_seven_days_newest_first(as_u
         {"at": iso(rows["missing_hd"].at), "email": "a@gmail.com", "reason": "missing_hd"},
         {"at": iso(rows["wrong_domain"].at), "email": "b@evil.test", "reason": "wrong_domain"},
     ]
+
+
+def test_the_refused_feed_returns_only_the_newest_rows_up_to_the_limit(as_user, db_url):
+    admin = as_user("root@example.com", "sub-root", "admin")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    extra = 5
+
+    def add(s):
+        s.add_all(
+            AuthEvent(
+                at=now - timedelta(minutes=i),
+                email=f"u{i}@gmail.com",
+                outcome="refused",
+                reason="wrong_domain",
+            )
+            for i in range(REFUSED_FEED_LIMIT + extra)
+        )
+        s.commit()
+
+    query(db_url, add)
+
+    response = admin.get("/api/auth-events/refused")
+
+    assert response.status_code == 200
+    emails = [row["email"] for row in response.json()]
+    assert emails == [f"u{i}@gmail.com" for i in range(REFUSED_FEED_LIMIT)]
