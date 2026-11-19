@@ -7,6 +7,7 @@ import {
   getMembers,
   getRefused,
   setMemberRole,
+  signOut,
 } from "./api";
 
 const user = {
@@ -247,5 +248,26 @@ describe("getMemberCount", () => {
       throw new TypeError("network down");
     });
     expect(await getMemberCount()).toBeNull();
+  });
+});
+
+describe("signOut", () => {
+  it("posts to /auth/logout with the session cookie", async () => {
+    const fetchMock = stubFetch(async () => new Response(null, { status: 204 }));
+    await signOut();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/auth/logout");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("resolves when the server fails or cannot be reached", async () => {
+    stubFetch(async () => reply(500, { detail: "boom" }));
+    await expect(signOut()).resolves.toBeUndefined();
+    stubFetch(async () => {
+      throw new TypeError("offline");
+    });
+    await expect(signOut()).resolves.toBeUndefined();
   });
 });
