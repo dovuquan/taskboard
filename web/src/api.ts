@@ -121,6 +121,96 @@ export async function setMemberRole(id: number, role: Role): Promise<RoleResult>
   return { kind: failure(res.status) };
 }
 
+export type BoardRole = "owner" | "member" | "observer";
+export type Visibility = "workspace" | "private";
+
+export type BoardPerson = {
+  id: number;
+  name: string | null;
+  email: string;
+  avatar_url: string | null;
+};
+
+/** One board on the Boards screen. `my_role` is null in the ownerless list. */
+export type Tile = {
+  id: number;
+  name: string;
+  visibility: Visibility;
+  my_role: BoardRole | null;
+  member_count: number;
+  members: BoardPerson[];
+  updated_at: string;
+};
+
+export type BoardDetail = Omit<Tile, "my_role"> & { my_role: BoardRole; created_at: string };
+
+export type BoardMember = BoardPerson & {
+  role: BoardRole;
+  added_at: string;
+  pending: boolean;
+};
+
+export type BoardError =
+  | Failure
+  | "not_found"
+  | "member_not_found"
+  | "already_member"
+  | "last_owner"
+  | "has_owner"
+  | "invalid"
+  | "conflict";
+
+export type BoardResult<T> = { kind: "ok"; data: T } | { kind: BoardError };
+
+const CONFLICTS = ["already_member", "last_owner", "has_owner", "conflict"] as const;
+
+function boardFailure(status: number, body: unknown): BoardError {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (status === 404) return detail === "member_not_found" ? "member_not_found" : "not_found";
+  if (status === 409) {
+    return CONFLICTS.find((c) => c === detail) ?? "server";
+  }
+  if (status === 422) return "invalid";
+  return failure(status);
+}
+
+async function call<T>(method: string, url: string, body?: unknown): Promise<BoardResult<T>> {
+  const init: RequestInit =
+    body === undefined
+      ? { ...INIT, method }
+      : {
+          ...INIT,
+          method,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        };
+  const res = await send(url, init);
+  if (!res) return { kind: "network" };
+  if (res.status === 204) return { kind: "ok", data: undefined as T };
+  if (res.status === 200 || res.status === 201) {
+    return res.body === null ? { kind: "server" } : { kind: "ok", data: res.body as T };
+  }
+  return { kind: boardFailure(res.status, res.body) };
+}
+
+export const getBoards = () => call<Tile[]>("GET", "/api/boards");
+export const getOwnerless = () => call<Tile[]>("GET", "/api/boards/ownerless");
+export const getBoard = (id: number) => call<BoardDetail>("GET", `/api/boards/${id}`);
+export const createBoard = (name: string, visibility: Visibility) =>
+  call<BoardDetail>("POST", "/api/boards", { name, visibility });
+export const patchBoard = (id: number, change: { name?: string; visibility?: Visibility }) =>
+  call<BoardDetail>("PATCH", `/api/boards/${id}`, change);
+export const takeOwnership = (id: number) =>
+  call<BoardDetail>("POST", `/api/boards/${id}/take-ownership`);
+export const getBoardMembers = (id: number) =>
+  call<BoardMember[]>("GET", `/api/boards/${id}/members`);
+export const addBoardMember = (id: number, userId: number) =>
+  call<BoardMember>("POST", `/api/boards/${id}/members`, { user_id: userId });
+export const setBoardRole = (id: number, userId: number, role: BoardRole) =>
+  call<BoardMember>("PATCH", `/api/boards/${id}/members/${userId}`, { role });
+export const removeBoardMember = (id: number, userId: number) =>
+  call<undefined>("DELETE", `/api/boards/${id}/members/${userId}`);
+
 export async function getMemberCount(): Promise<number | null> {
   try {
     const res = await fetch("/api/members", INIT);

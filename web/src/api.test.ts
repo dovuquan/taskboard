@@ -1,13 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  addBoardMember,
+  createBoard,
+  getBoard,
+  getBoardMembers,
+  getBoards,
   getConfig,
   getMe,
   getMemberCount,
   getMembers,
+  getOwnerless,
   getRefused,
+  patchBoard,
+  removeBoardMember,
+  setBoardRole,
   setMemberRole,
   signOut,
+  takeOwnership,
 } from "./api";
 
 const user = {
@@ -248,6 +258,91 @@ describe("getMemberCount", () => {
       throw new TypeError("network down");
     });
     expect(await getMemberCount()).toBeNull();
+  });
+});
+
+describe("boards api", () => {
+  const tile = { id: 7, name: "Office move", visibility: "workspace" };
+
+  it("lists boards and sends the session cookie", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [tile]));
+    expect(await getBoards()).toEqual({ kind: "ok", data: [tile] });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("reads the ownerless list and reports 403 as forbidden", async () => {
+    const fetchMock = stubFetch(async () => reply(403, { detail: "forbidden" }));
+    expect(await getOwnerless()).toEqual({ kind: "forbidden" });
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/boards/ownerless");
+  });
+
+  it("creates a board with a JSON body and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, tile));
+    expect(await createBoard("Office move", "private")).toEqual({ kind: "ok", data: tile });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"name":"Office move","visibility":"private"}');
+  });
+
+  it("patches a board with only the given fields", async () => {
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    await patchBoard(7, { name: "New" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/7");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"name":"New"}');
+  });
+
+  it("adds, re-roles and removes a board member", async () => {
+    const fetchMock = stubFetch(async () => reply(200, {}));
+    await addBoardMember(7, 3);
+    await setBoardRole(7, 3, "owner");
+    stubFetch(async () => new Response(null, { status: 204 }));
+    expect(await removeBoardMember(7, 3)).toEqual({ kind: "ok", data: undefined });
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0][0]).toBe("/api/boards/7/members");
+    expect(calls[0][1].body).toBe('{"user_id":3}');
+    expect(calls[1][0]).toBe("/api/boards/7/members/3");
+    expect(calls[1][1].method).toBe("PATCH");
+    expect(calls[1][1].body).toBe('{"role":"owner"}');
+  });
+
+  it("posts take-ownership", async () => {
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    await takeOwnership(9);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/9/take-ownership");
+    expect(init.method).toBe("POST");
+  });
+
+  it.each([
+    [401, { detail: "session_expired" }, "expired"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [404, { detail: "member_not_found" }, "member_not_found"],
+    [409, { detail: "already_member" }, "already_member"],
+    [409, { detail: "last_owner" }, "last_owner"],
+    [409, { detail: "has_owner" }, "has_owner"],
+    [409, { detail: "conflict" }, "conflict"],
+    [409, { detail: "other" }, "server"],
+    [422, { detail: [] }, "invalid"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await getBoard(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getBoardMembers(7)).toEqual({ kind: "network" });
+  });
+
+  it("reports a server problem when a 200 has no body", async () => {
+    stubFetch(async () => new Response("", { status: 200 }));
+    expect(await getBoard(7)).toEqual({ kind: "server" });
   });
 });
 

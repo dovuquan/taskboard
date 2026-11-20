@@ -7,6 +7,29 @@ export function initials(user: Pick<Me, "name" | "email">): string {
   return (user.email[0] ?? "?").toUpperCase();
 }
 
+/** Overlapping avatars for the people shown, plus a +N chip when the board has more. */
+export function AvatarStack({
+  people,
+  total,
+}: {
+  people: Pick<Me, "id" | "name" | "email">[];
+  total: number;
+}) {
+  const more = total - people.length;
+  return (
+    <span className="stack">
+      {people.map((p) => (
+        <Avatar key={p.id} user={p} />
+      ))}
+      {more > 0 && (
+        <span className="chip" title={`${total} people on this board`}>
+          {`+${more}`}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Avatar({
   user,
   large = false,
