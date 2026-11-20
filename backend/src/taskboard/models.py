@@ -1,4 +1,4 @@
-"""SQLAlchemy models for the M1 tables."""
+"""SQLAlchemy models for the M1 tables and the boards."""
 
 from datetime import UTC, datetime
 
@@ -67,3 +67,33 @@ class Event(Base):
     subject_type: Mapped[str] = mapped_column(String)
     subject_id: Mapped[str] = mapped_column(String)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Set for events that belong to a board; a plain number, not a key, so the log outlives it.
+    board_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
+
+class Board(Base):
+    __tablename__ = "boards"
+    __table_args__ = (
+        CheckConstraint("visibility IN ('workspace', 'private')", name="ck_board_visibility"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    visibility: Mapped[str] = mapped_column(String)
+    key_prefix: Mapped[str] = mapped_column(String, default="TB", server_default="TB")
+    next_card_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class BoardMember(Base):
+    __tablename__ = "board_members"
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'member', 'observer')", name="ck_board_member_role"),
+    )
+
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

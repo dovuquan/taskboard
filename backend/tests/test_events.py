@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from taskboard.db import make_engine, run_migrations
 from taskboard.events import record_change
-from taskboard.models import Event, User, WorkspaceMember
+from taskboard.models import Board, Event, User, WorkspaceMember
 
 
 @pytest.fixture
@@ -122,6 +122,62 @@ def test_data_defaults_to_empty(session, db_url):
     )
     with Session(make_engine(db_url)) as fresh:
         assert fresh.scalar(select(Event.data)) == {}
+
+
+def test_callable_subject_id_and_board_id_receive_the_changes_result(session, db_url):
+    def create(s: Session) -> int:
+        board = Board(name="Roadmap", visibility="workspace", created_by=1)
+        s.add(board)
+        s.flush()
+        return board.id
+
+    board_id = record_change(
+        session,
+        create,
+        actor_id=1,
+        kind="board.created",
+        subject_type="board",
+        subject_id=lambda new_id: str(new_id),
+        board_id=lambda new_id: new_id,
+    )
+
+    with Session(make_engine(db_url)) as fresh:
+        [e] = fresh.scalars(select(Event)).all()
+        assert (e.subject_id, e.board_id) == (str(board_id), board_id)
+
+
+def test_board_id_may_be_a_plain_int_and_defaults_to_none(session, db_url):
+    record_change(
+        session,
+        lambda s: None,
+        actor_id=1,
+        kind="x.y",
+        subject_type="t",
+        subject_id="1",
+        board_id=7,
+    )
+    record_change(session, lambda s: None, actor_id=1, kind="x.z", subject_type="t", subject_id="1")
+
+    with Session(make_engine(db_url)) as fresh:
+        assert fresh.scalars(select(Event.board_id).order_by(Event.id)).all() == [7, None]
+
+
+def test_a_failing_callable_rolls_the_change_back(session, db_url):
+    def boom(_result):
+        raise RuntimeError("no id")
+
+    with pytest.raises(RuntimeError, match="no id"):
+        record_change(
+            session,
+            set_role(2, "admin"),
+            actor_id=1,
+            kind="x.y",
+            subject_type="t",
+            subject_id=boom,
+        )
+
+    assert role_of(db_url, 2) == "member"
+    assert event_count(db_url) == 0
 
 
 def _add(s: Session) -> None:

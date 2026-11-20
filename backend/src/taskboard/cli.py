@@ -15,8 +15,10 @@ from sqlalchemy.orm import Session
 
 from taskboard.db import _MIGRATIONS, database_url, make_engine, run_migrations
 from taskboard.events import record_change
-from taskboard.models import User, WorkspaceMember
+from taskboard.models import Board, BoardMember, User, WorkspaceMember
 from taskboard.settings import allowed_hd
+
+SEED_BOARD = "Office move"
 
 SEED_PEOPLE = [
     ("Linh Tran", "linh.tran"),
@@ -75,6 +77,49 @@ def _add_member(session: Session, email: str, role: str, name: str | None = None
         data={"role": role, "pending": True},
     )
     return user_id
+
+
+def _seed_board(session: Session, domain: str) -> bool:
+    """Add the invented Workspace board once: first seed person owns it, the rest are members."""
+    if session.scalar(select(Board.id).where(Board.name == SEED_BOARD)) is not None:
+        return False
+    ids = [
+        session.scalar(select(User.id).where(User.email == f"{local}@{domain}"))
+        for _, local in SEED_PEOPLE
+    ]
+    owner_id, member_ids = ids[0], ids[1:]
+
+    def create(s: Session) -> int:
+        board = Board(name=SEED_BOARD, visibility="workspace", created_by=owner_id)
+        s.add(board)
+        s.flush()
+        s.add(BoardMember(board_id=board.id, user_id=owner_id, role="owner"))
+        return board.id
+
+    board_id = record_change(
+        session,
+        create,
+        actor_id=None,
+        kind="board.created",
+        subject_type="board",
+        subject_id=lambda new_id: str(new_id),
+        data={"name": SEED_BOARD, "visibility": "workspace"},
+        board_id=lambda new_id: new_id,
+    )
+    for member_id in member_ids:
+        record_change(
+            session,
+            lambda s, member_id=member_id: s.add(
+                BoardMember(board_id=board_id, user_id=member_id, role="member")
+            ),
+            actor_id=None,
+            kind="board_member.added",
+            subject_type="board",
+            subject_id=str(board_id),
+            data={"user_id": member_id, "role": "member"},
+            board_id=board_id,
+        )
+    return True
 
 
 def cmd_migrate(_args: argparse.Namespace) -> int:
@@ -143,11 +188,14 @@ def cmd_seed(_args: argparse.Namespace) -> int:
                 if session.scalar(select(User.id).where(User.email == email)) is None:
                     _add_member(session, email, "member", name)
                     added += 1
+            board_added = _seed_board(session, domain)
     except IntegrityError:
         return _concurrent_change()
     finally:
         engine.dispose()
     print(f"seeded {added} new member(s)")
+    if board_added:
+        print(f"seeded the board {SEED_BOARD!r}")
     return 0
 
 

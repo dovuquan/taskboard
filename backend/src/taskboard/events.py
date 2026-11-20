@@ -32,10 +32,14 @@ def record_change[T](
     actor_id: int | None,
     kind: str,
     subject_type: str,
-    subject_id: str,
+    subject_id: str | Callable[[T], str],
     data: dict[str, Any] | None = None,
+    board_id: int | Callable[[T], int] | None = None,
 ) -> T:
     """Run `change`, insert its event, and commit both in one transaction.
+
+    `subject_id` and `board_id` may be callables; they receive the result of `change`,
+    after it is flushed, so a row created by the change can name its own new id.
 
     Any failure, in the change or in the event insert, rolls both back and is
     re-raised. The session must have no uncommitted work, pending or already
@@ -46,13 +50,15 @@ def record_change[T](
         raise RuntimeError("record_change needs a session with no pending changes")
     try:
         result = change(session)
+        session.flush()
         session.add(
             Event(
                 actor_id=actor_id,
                 kind=kind,
                 subject_type=subject_type,
-                subject_id=subject_id,
+                subject_id=subject_id(result) if callable(subject_id) else subject_id,
                 data=data or {},
+                board_id=board_id(result) if callable(board_id) else board_id,
             )
         )
         session.flush()
