@@ -16,7 +16,18 @@ COLUMNS = {
     "workspace_members": {"user_id", "role", "joined_at"},
     "sessions": {"id_hash", "user_id", "created_at", "expires_at"},
     "auth_events": {"id", "at", "email", "outcome", "reason"},
-    "events": {"id", "at", "actor_id", "kind", "subject_type", "subject_id", "data"},
+    "events": {"id", "at", "actor_id", "kind", "subject_type", "subject_id", "data", "board_id"},
+    "boards": {
+        "id",
+        "name",
+        "visibility",
+        "key_prefix",
+        "next_card_number",
+        "created_by",
+        "created_at",
+        "archived_at",
+    },
+    "board_members": {"board_id", "user_id", "role", "added_at"},
 }
 
 
@@ -33,7 +44,7 @@ def test_every_connection_gets_the_pragmas(db_url):
             conn.close()
 
 
-def test_migration_creates_the_five_tables(db_url):
+def test_migration_creates_the_tables(db_url):
     run_migrations(db_url)
 
     inspector = inspect(create_engine(db_url))

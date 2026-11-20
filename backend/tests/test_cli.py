@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from taskboard import cli
 from taskboard.db import make_engine
-from taskboard.models import Event, User, WorkspaceMember
+from taskboard.models import Board, BoardMember, Event, User, WorkspaceMember
 
 
 @pytest.fixture(autouse=True)
@@ -173,7 +173,34 @@ def test_seed_adds_five_members_once(migrated):
     assert len(users) == 5
     assert all(u.email.endswith("@example.com") and u.google_sub is None for u in users)
     assert all(role_of(migrated, u.email) == "member" for u in users)
-    assert [e.kind for e in events(migrated)] == ["member.added"] * 5
+    assert [e.kind for e in events(migrated)][:5] == ["member.added"] * 5
+
+
+def test_seed_adds_one_workspace_board_once_with_events(migrated):
+    assert cli.main(["seed"]) == 0
+    assert cli.main(["seed"]) == 0
+
+    boards = query(migrated, lambda s: list(s.scalars(select(Board))))
+    [board] = boards
+    assert (board.name, board.visibility) == ("Office move", "workspace")
+    rows = query(
+        migrated,
+        lambda s: list(
+            s.execute(
+                select(User.email, BoardMember.role)
+                .join(User, User.id == BoardMember.user_id)
+                .where(BoardMember.board_id == board.id)
+                .order_by(User.email)
+            )
+        ),
+    )
+    assert len(rows) == 5
+    assert [email for email, role in rows if role == "owner"] == ["linh.tran@example.com"]
+    assert [role for _, role in rows].count("member") == 4
+    assert board.created_by == user_by_email(migrated, "linh.tran@example.com").id
+    kinds = [(e.kind, e.board_id) for e in events(migrated)[5:]]
+    assert kinds == [("board.created", board.id)] + [("board_member.added", board.id)] * 4
+    assert all(e.actor_id is None for e in events(migrated))
 
 
 @pytest.mark.parametrize(
@@ -199,7 +226,7 @@ def test_a_clashing_user_id_is_reported_without_a_traceback(migrated, monkeypatc
 def test_check_prints_integrity_and_schema_head(migrated, capsys):
     capsys.readouterr()
     assert cli.main(["check"]) == 0
-    assert capsys.readouterr().out == "integrity: ok\nschema: 0001 (head)\n"
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0002 (head)\n"
 
 
 def default_db_path() -> Path:
@@ -266,7 +293,7 @@ def test_check_reports_a_foreign_key_violation(migrated, capsys):
 
     assert cli.main(["check"]) == 1
     assert capsys.readouterr().out == (
-        "integrity: foreign key violation in workspace_members\nschema: 0001 (head)\n"
+        "integrity: foreign key violation in workspace_members\nschema: 0002 (head)\n"
     )
 
 
@@ -275,7 +302,7 @@ def test_check_reports_a_schema_behind_head(migrated, capsys):
     capsys.readouterr()
 
     assert cli.main(["check"]) == 1
-    assert capsys.readouterr().out == "integrity: ok\nschema: 0000 (head is 0001)\n"
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0000 (head is 0002)\n"
 
 
 def test_a_failing_write_leaves_neither_change_nor_event(migrated, monkeypatch):
@@ -300,4 +327,4 @@ def test_entry_point_runs_check(migrated):
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "integrity: ok\nschema: 0001 (head)\n"
+    assert result.stdout == "integrity: ok\nschema: 0002 (head)\n"
