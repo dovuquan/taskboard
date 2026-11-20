@@ -1,0 +1,39 @@
+[project]
+name = "taskboard"
+version = "0.1.0"
+description = "Taskboard backend: FastAPI app that also serves the web build."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.20.1",
+    "fastapi",
+    "httpx>=0.28.1",
+    "pyjwt[crypto]>=2.15.1",
+    "sqlalchemy>=2.1.8",
+    "uvicorn",
+]
+
+[project.scripts]
+taskboard = "taskboard.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.14"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]
