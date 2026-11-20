@@ -66,6 +66,10 @@ class NotOwner(Exception):
     """The acting user is no longer an owner (or admin) of the board."""
 
 
+class NotAdmin(Exception):
+    """The acting user is no longer a workspace admin."""
+
+
 class _AlreadyChanged(Exception):
     """Another request changed this row first; nothing was written."""
 
@@ -295,47 +299,57 @@ def get_board(board_id: BoardId, user: User = Depends(current_user), db: Session
 # ---- rename and visibility --------------------------------------------------------
 
 
-def _update_board(
-    db: Session, ctx: BoardCtx, *, column: str, old: str, new: str, kind: str
-) -> None:
-    board_id, actor_id = ctx.board.id, ctx.user.id
-
-    def change(s: Session) -> None:
-        s.execute(update(Board).where(Board.id == board_id).values({column: new}))
-        _ensure_acting_owner(s, actor_id, board_id)
-
-    record_change(
-        db,
-        change,
-        actor_id=actor_id,
-        kind=kind,
-        subject_type="board",
-        subject_id=str(board_id),
-        data={"from": old, "to": new},
-        board_id=board_id,
-    )
-
-
 @router.patch("/api/boards/{board_id}")
 def patch_board(
     body: PatchBody,
     ctx: BoardCtx = _OWNER,
     db: Session = Depends(get_db),
 ):
-    board_id = ctx.board.id
-    old_name, old_visibility = ctx.board.name, ctx.board.visibility
-    try:
-        if body.name is not None and body.name != old_name:
-            _update_board(db, ctx, column="name", old=old_name, new=body.name, kind="board.renamed")
-        if body.visibility is not None and body.visibility != old_visibility:
-            _update_board(
-                db,
-                ctx,
-                column="visibility",
-                old=old_visibility,
-                new=body.visibility,
-                kind="board.visibility_changed",
+    board_id, actor_id = ctx.board.id, ctx.user.id
+    changes: dict[str, tuple[str, str]] = {}  # column -> (old, new)
+    if body.name is not None and body.name != ctx.board.name:
+        changes["name"] = (ctx.board.name, body.name)
+    if body.visibility is not None and body.visibility != ctx.board.visibility:
+        changes["visibility"] = (ctx.board.visibility, body.visibility)
+    if not changes:
+        return _detail(db, board_id, ctx.role)
+
+    if len(changes) == 2:
+        kind = "board.updated"
+        data: dict[str, Any] = {
+            col: {"from": old, "to": new} for col, (old, new) in changes.items()
+        }
+    else:
+        [(column, (old, new))] = changes.items()
+        kind = "board.renamed" if column == "name" else "board.visibility_changed"
+        data = {"from": old, "to": new}
+
+    def change(s: Session) -> None:
+        # Each conditional UPDATE only matches the value this request read; if another request
+        # got there first, the whole change rolls back and no event is written.
+        for column, (old, new) in changes.items():
+            result = s.execute(
+                update(Board)
+                .where(Board.id == board_id, getattr(Board, column) == old)
+                .values({column: new})
             )
+            if result.rowcount == 0:
+                raise _AlreadyChanged
+        _ensure_acting_owner(s, actor_id, board_id)
+
+    try:
+        record_change(
+            db,
+            change,
+            actor_id=actor_id,
+            kind=kind,
+            subject_type="board",
+            subject_id=str(board_id),
+            data=data,
+            board_id=board_id,
+        )
+    except _AlreadyChanged:
+        pass  # rolled back, no event; answer with the current state
     except NotOwner:
         raise HTTPException(403, "forbidden") from None
     return _detail(db, board_id, ctx.role)
@@ -505,10 +519,15 @@ def take_ownership(
     board = db.get(Board, board_id)
     if board is None or board.archived_at is not None:
         raise HTTPException(404, "board_not_found")
-    if board.visibility != "private" or _owner_count(db, board_id) > 0:
-        raise HTTPException(409, "has_owner")
     admin_id = admin.id
     old = _row_role(db, board_id, admin_id)
+    if board.visibility != "private":
+        raise HTTPException(409, "has_owner")
+    if _owner_count(db, board_id) > 0:
+        # A Private board the admin is not on stays hidden, as in GET /api/boards/{id}.
+        if old is None:
+            raise HTTPException(404, "board_not_found")
+        raise HTTPException(409, "has_owner")
 
     def change(s: Session) -> None:
         if old is None:
@@ -528,6 +547,9 @@ def take_ownership(
         # The write above took the lock; now nobody else may be an owner.
         if _owner_count(s, board_id) != 1:
             raise HasOwner
+        ws = s.scalar(select(WorkspaceMember.role).where(WorkspaceMember.user_id == admin_id))
+        if ws != "admin":
+            raise NotAdmin
 
     try:
         record_change(
@@ -542,4 +564,6 @@ def take_ownership(
         )
     except (HasOwner, IntegrityError):
         raise HTTPException(409, "has_owner") from None
+    except NotAdmin:
+        raise HTTPException(403, "forbidden") from None
     return _detail(db, board_id, "owner")

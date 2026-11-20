@@ -3,7 +3,7 @@
 import threading
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from support import events, query, user_by_email
 
 from taskboard.models import Board, BoardMember, User, WorkspaceMember
@@ -69,6 +69,47 @@ def board_row(db_url, board_id):
 
 def iso(dt):
     return dt.isoformat() + "Z"
+
+
+def set_board_role(db_url, board_id, uid, role):
+    def write(s):
+        s.execute(
+            update(BoardMember)
+            .where(BoardMember.board_id == board_id, BoardMember.user_id == uid)
+            .values(role=role)
+        )
+        s.commit()
+
+    query(db_url, write)
+
+
+def set_workspace_role(db_url, uid, role):
+    def write(s):
+        s.execute(update(WorkspaceMember).where(WorkspaceMember.user_id == uid).values(role=role))
+        s.commit()
+
+    query(db_url, write)
+
+
+def set_board_columns(db_url, board_id, **values):
+    def write(s):
+        s.execute(update(Board).where(Board.id == board_id).values(**values))
+        s.commit()
+
+    query(db_url, write)
+
+
+def interfere(monkeypatch, action):
+    """Run `action` (a direct database write) just before the request's transaction starts."""
+    from taskboard import boards
+
+    real = boards.record_change
+
+    def hooked(session, change, **kw):
+        action()
+        return real(session, change, **kw)
+
+    monkeypatch.setattr(boards, "record_change", hooked)
 
 
 # ---- not signed in, no workspace row --------------------------------------------
@@ -418,6 +459,107 @@ def test_patch_validates_the_body(as_user, db_url, body):
 
     assert response.status_code == 422
     assert board_row(db_url, board_id).name == "Keep"
+    assert len(events(db_url)) == before
+
+
+def test_a_patch_with_name_and_visibility_writes_one_event_and_applies_both(as_user, db_url):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    board_id = add_board(db_url, ada_id, "Old", "workspace", {ada_id: "owner"})
+    before = len(events(db_url))
+
+    response = ada.patch(f"/api/boards/{board_id}", json={"name": "New", "visibility": "private"})
+
+    assert response.status_code == 200
+    assert (response.json()["name"], response.json()["visibility"]) == ("New", "private")
+    [event] = events(db_url)[before:]
+    assert (event.actor_id, event.kind, event.board_id) == (ada_id, "board.updated", board_id)
+    assert event.data == {
+        "name": {"from": "Old", "to": "New"},
+        "visibility": {"from": "workspace", "to": "private"},
+    }
+
+
+def test_a_patch_that_cannot_apply_one_field_changes_neither_and_writes_no_event(
+    as_user, db_url, monkeypatch
+):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    board_id = add_board(db_url, ada_id, "Old", "workspace", {ada_id: "owner"})
+    before = len(events(db_url))
+    interfere(monkeypatch, lambda: set_board_columns(db_url, board_id, visibility="private"))
+
+    response = ada.patch(f"/api/boards/{board_id}", json={"name": "New", "visibility": "private"})
+
+    assert response.status_code == 200
+    assert (response.json()["name"], response.json()["visibility"]) == ("Old", "private")
+    assert board_row(db_url, board_id).name == "Old"
+    assert len(events(db_url)) == before
+
+
+def test_a_rename_that_lost_a_race_writes_no_event_and_keeps_the_other_name(
+    as_user, db_url, monkeypatch
+):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    board_id = add_board(db_url, ada_id, "Old", "workspace", {ada_id: "owner"})
+    before = len(events(db_url))
+    interfere(monkeypatch, lambda: set_board_columns(db_url, board_id, name="Other"))
+
+    response = ada.patch(f"/api/boards/{board_id}", json={"name": "New"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Other"
+    assert board_row(db_url, board_id).name == "Other"
+    assert len(events(db_url)) == before
+
+
+# ---- the actor is checked again inside the transaction ----------------------------
+
+
+def _demoted_actor_case(as_user, db_url, monkeypatch):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    bob = add_user(db_url, "bob@example.com")
+    new = add_user(db_url, "new@example.com")
+    board_id = add_board(db_url, ada_id, "B", "workspace", {ada_id: "owner", bob: "member"})
+    interfere(monkeypatch, lambda: set_board_role(db_url, board_id, ada_id, "member"))
+    return ada, board_id, bob, new
+
+
+def test_an_owner_demoted_mid_request_cannot_rename(as_user, db_url, monkeypatch):
+    ada, board_id, _bob, _new = _demoted_actor_case(as_user, db_url, monkeypatch)
+    before = len(events(db_url))
+
+    response = ada.patch(f"/api/boards/{board_id}", json={"name": "Renamed"})
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert board_row(db_url, board_id).name == "B"
+    assert len(events(db_url)) == before
+
+
+def test_an_owner_demoted_mid_request_cannot_add_a_member(as_user, db_url, monkeypatch):
+    ada, board_id, _bob, new = _demoted_actor_case(as_user, db_url, monkeypatch)
+    before = len(events(db_url))
+
+    response = ada.post(f"/api/boards/{board_id}/members", json={"user_id": new})
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert board_role(db_url, board_id, new) is None
+    assert len(events(db_url)) == before
+
+
+def test_an_owner_demoted_mid_request_cannot_remove_a_member(as_user, db_url, monkeypatch):
+    ada, board_id, bob, _new = _demoted_actor_case(as_user, db_url, monkeypatch)
+    before = len(events(db_url))
+
+    response = ada.delete(f"/api/boards/{board_id}/members/{bob}")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert board_role(db_url, board_id, bob) == "member"
     assert len(events(db_url)) == before
 
 
@@ -790,7 +932,7 @@ def test_take_ownership_upgrades_an_admin_who_is_already_on_the_board(as_user, d
     assert board_role(db_url, board_id, admin_id) == "owner"
 
 
-def test_take_ownership_is_refused_when_the_board_has_an_owner(as_user, db_url):
+def test_take_ownership_of_a_private_board_the_admin_cannot_see_is_not_found(as_user, db_url):
     admin = as_user("root@example.com", "sub-root", "admin")
     boss = add_user(db_url, "boss@example.com")
     board_id = add_board(db_url, boss, "Owned", "private", {boss: "owner"})
@@ -798,9 +940,44 @@ def test_take_ownership_is_refused_when_the_board_has_an_owner(as_user, db_url):
 
     response = admin.post(f"/api/boards/{board_id}/take-ownership")
 
-    assert response.status_code == 409
-    assert response.json() == {"detail": "has_owner"}
+    assert response.status_code == 404
+    assert response.json() == {"detail": "board_not_found"}
     assert owners(db_url, board_id) == [boss]
+    assert len(events(db_url)) == before
+
+
+def test_take_ownership_is_a_conflict_on_a_board_the_admin_can_see(as_user, db_url):
+    admin = as_user("root@example.com", "sub-root", "admin")
+    admin_id = user_by_email(db_url, "root@example.com").id
+    boss = add_user(db_url, "boss@example.com")
+    on_it = add_board(db_url, boss, "Mine", "private", {boss: "owner", admin_id: "observer"})
+    open_board = add_board(db_url, boss, "Open", "workspace", {boss: "owner"})
+    before = len(events(db_url))
+
+    for board_id in (on_it, open_board):
+        response = admin.post(f"/api/boards/{board_id}/take-ownership")
+
+        assert response.status_code == 409
+        assert response.json() == {"detail": "has_owner"}
+        assert owners(db_url, board_id) == [boss]
+    assert board_role(db_url, on_it, admin_id) == "observer"
+    assert len(events(db_url)) == before
+
+
+def test_an_admin_demoted_mid_request_cannot_take_ownership(as_user, db_url, monkeypatch):
+    admin = as_user("root@example.com", "sub-root", "admin")
+    admin_id = user_by_email(db_url, "root@example.com").id
+    boss = add_user(db_url, "boss@example.com")
+    board_id = add_board(db_url, boss, "Orphan", "private", {boss: "member"})
+    before = len(events(db_url))
+    interfere(monkeypatch, lambda: set_workspace_role(db_url, admin_id, "member"))
+
+    response = admin.post(f"/api/boards/{board_id}/take-ownership")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "forbidden"}
+    assert owners(db_url, board_id) == []
+    assert board_role(db_url, board_id, admin_id) is None
     assert len(events(db_url)) == before
 
 
