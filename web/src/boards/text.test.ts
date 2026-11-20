@@ -11,7 +11,7 @@ describe("formatUpdated", () => {
 
   it("counts minutes and hours", () => {
     expect(formatUpdated("2026-11-20T11:55:00Z", now)).toBe("5 min ago");
-    expect(formatUpdated("2026-11-20T09:00:00Z", now)).toBe("3 h ago");
+    expect(formatUpdated("2026-11-20T09:00:00Z", now)).toBe("3h ago");
   });
 
   it("treats a time slightly in the future as just now", () => {

@@ -112,7 +112,7 @@ describe("BoardsView tiles", () => {
     const { html, text } = render({ tiles: [tile()] });
     expect(html).toMatch(/<a[^>]*class="board-tile"[^>]*href="\/boards\/7"/);
     expect(text).toContain("Office move");
-    expect(text).toContain("2 members · Updated 3 h ago");
+    expect(text).toContain("2 members · Updated 3h ago");
   });
 
   it("colours the square from the board id", () => {
