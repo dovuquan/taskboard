@@ -16,7 +16,7 @@ from support import (
     user_by_email,
 )
 
-from taskboard.models import BoardList, _now
+from taskboard.models import BoardList, BoardMember, _now
 
 
 def add_list(db_url, board_id, name, position, *, archived_by=None, archived_at=None):
@@ -155,7 +155,19 @@ def test_valid_names_are_accepted_and_trimmed(as_user, db_url, name):
     assert response.json()["name"] == name.strip()
 
 
-@pytest.mark.parametrize("body", [{"name": "x" * 81}, {"name": ""}, {"name": "   "}, {}])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "x" * 81},
+        {"name": ""},
+        {"name": "   "},
+        {"name": "​"},
+        {"name": " ​‌‍⁠﻿ "},
+        {"name": "a\x00b"},
+        {"name": "a\nb"},
+        {},
+    ],
+)
 def test_bad_names_are_rejected_with_no_row_and_no_event(as_user, db_url, body):
     client, _ada, board_id = board_with(as_user, db_url)
     before = len(events(db_url))
@@ -417,7 +429,8 @@ def test_archive_hides_the_list_sets_the_fields_and_writes_an_event(as_user, db_
         str(b),
     )
     assert event.data == {"name": "B"}
-    assert a
+    untouched = list_row(db_url, a)
+    assert (untouched.name, untouched.archived_at, untouched.archived_by) == ("A", None, None)
 
 
 @pytest.mark.parametrize(
@@ -688,3 +701,120 @@ def test_role_matrix(as_user, db_url, action, actor, visibility):
         assert response.json() == {"detail": "forbidden" if expected == 403 else "board_not_found"}
         assert len(events(db_url)) == before
         assert all_rows(db_url, board_id) == rows
+
+
+# ---- the actor's role is checked again inside the transaction -------------------
+
+
+def _demote(db_url, board_id, user_id, role):
+    def write(s):
+        s.execute(
+            update(BoardMember)
+            .where(BoardMember.board_id == board_id, BoardMember.user_id == user_id)
+            .values(role=role)
+        )
+        s.commit()
+
+    return lambda: query(db_url, write)
+
+
+MID_REQUEST = {
+    "create": lambda c, b, ids: c.post(url(b), json={"name": "New"}),
+    "rename": lambda c, b, ids: c.patch(url(b, ids[0]), json={"name": "Renamed"}),
+    "move": lambda c, b, ids: c.post(url(b, ids[0], "move"), json={"after_id": ids[1]}),
+    "archive": lambda c, b, ids: c.post(url(b, ids[0], "archive")),
+}
+
+
+@pytest.mark.parametrize("change", ["demoted", "board_archived"])
+@pytest.mark.parametrize("action", list(MID_REQUEST))
+def test_a_role_lost_mid_request_writes_nothing(as_user, db_url, monkeypatch, action, change):
+    client, ada, board_id = board_with(as_user, db_url)
+    ids = [add_list(db_url, board_id, "A", 1.0), add_list(db_url, board_id, "B", 2.0)]
+    rows = all_rows(db_url, board_id)
+    before = len(events(db_url))
+    if change == "demoted":
+        interfere(monkeypatch, _demote(db_url, board_id, ada, "observer"), "lists")
+        status, detail = 403, "forbidden"
+    else:
+        interfere(
+            monkeypatch,
+            lambda: set_board_columns(db_url, board_id, archived_at=_now()),
+            "lists",
+        )
+        status, detail = 404, "board_not_found"
+
+    response = MID_REQUEST[action](client, board_id, ids)
+
+    assert response.status_code == status, response.text
+    assert response.json() == {"detail": detail}
+    assert len(events(db_url)) == before
+    assert all_rows(db_url, board_id) == rows
+
+
+@pytest.mark.parametrize("change", ["demoted", "board_archived"])
+def test_a_restore_after_losing_the_role_mid_request_writes_nothing(
+    as_user, db_url, monkeypatch, change
+):
+    client, board_id, list_id = restore_case(
+        as_user, db_url, actor_role="owner", archiver="pat", age=3600
+    )
+    ada = user_by_email(db_url, "ada@example.com").id
+    rows = all_rows(db_url, board_id)
+    before = len(events(db_url))
+    if change == "demoted":
+        # owner -> member: the 60-second window no longer lets her restore Pat's old archive
+        interfere(monkeypatch, _demote(db_url, board_id, ada, "member"), "lists")
+        status, detail = 403, "forbidden"
+    else:
+        interfere(
+            monkeypatch,
+            lambda: set_board_columns(db_url, board_id, archived_at=_now()),
+            "lists",
+        )
+        status, detail = 404, "board_not_found"
+
+    response = client.post(url(board_id, list_id, "restore"))
+
+    assert response.status_code == status, response.text
+    assert response.json() == {"detail": detail}
+    assert len(events(db_url)) == before
+    assert all_rows(db_url, board_id) == rows
+
+
+def test_an_archive_records_the_name_a_concurrent_rename_left(as_user, db_url, monkeypatch):
+    client, _ada, board_id = board_with(as_user, db_url)
+    list_id = add_list(db_url, board_id, "Old", 1.0)
+    before = len(events(db_url))
+    interfere(monkeypatch, lambda: query(db_url, _set(list_id, name="Newer")), "lists")
+
+    response = client.post(url(board_id, list_id, "archive"))
+
+    assert response.status_code == 200
+    assert response.json() == {"id": list_id, "name": "Newer"}
+    [event] = events(db_url)[before:]
+    assert (event.kind, event.data) == ("list.archived", {"name": "Newer"})
+
+
+# ---- after_id is a strict positive integer or null ------------------------------
+
+
+@pytest.mark.parametrize("after_id", [True, False, "5", 5.0, 0, -1, 2**63])
+def test_a_bad_after_id_is_rejected(as_user, db_url, after_id):
+    client, _ada, board_id = board_with(as_user, db_url)
+    ids = three_lists(db_url, board_id)
+    before = len(events(db_url))
+
+    response = client.post(url(board_id, ids[0], "move"), json={"after_id": after_id})
+
+    assert response.status_code == 422
+    assert len(events(db_url)) == before
+
+
+def test_a_null_or_valid_after_id_still_works(as_user, db_url):
+    client, _ada, board_id = board_with(as_user, db_url)
+    _a, b, c = three_lists(db_url, board_id)
+
+    assert client.post(url(board_id, c, "move"), json={"after_id": None}).status_code == 200
+    assert client.post(url(board_id, c, "move"), json={"after_id": b}).status_code == 200
+    assert names(client.get(url(board_id))) == ["A", "B", "C"]
