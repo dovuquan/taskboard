@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { LIST_LIMIT, arrange, canAddList, planDrop, revert } from "./logic";
+import {
+  LIST_LIMIT,
+  archiveIn,
+  arrange,
+  canAddList,
+  planDrop,
+  reinsertAt,
+  renameIn,
+  revert,
+} from "./logic";
 
 const order = [1, 2, 3, 4];
 
@@ -60,6 +69,73 @@ describe("arrange", () => {
       { id: 2, name: "b" },
       { id: 1, name: "a" },
     ]);
+  });
+});
+
+const lanes = [
+  { id: 1, name: "To do" },
+  { id: 2, name: "Doing" },
+  { id: 3, name: "Done" },
+];
+
+describe("renameIn", () => {
+  it("renames the list when its name is still `from`", () => {
+    expect(renameIn(lanes, 2, "Doing", "Active")).toEqual([
+      { id: 1, name: "To do" },
+      { id: 2, name: "Active" },
+      { id: 3, name: "Done" },
+    ]);
+  });
+
+  it("leaves the list alone when its name is no longer `from` (a later rename won)", () => {
+    expect(renameIn(lanes, 2, "Other", "Active")).toEqual(lanes);
+  });
+
+  it("leaves everything alone for an unknown id", () => {
+    expect(renameIn(lanes, 9, "Doing", "Active")).toEqual(lanes);
+  });
+
+  it("lets the server name replace the name the client sent", () => {
+    const sent = renameIn(lanes, 2, "Doing", "New");
+    expect(renameIn(sent, 2, "New", "Other")[1].name).toBe("Other");
+  });
+});
+
+describe("archiveIn", () => {
+  it("removes the list and reports where it was", () => {
+    expect(archiveIn(lanes, 2)).toEqual({
+      next: [lanes[0], lanes[2]],
+      index: 1,
+      list: lanes[1],
+    });
+  });
+
+  it("returns null for an unknown id", () => {
+    expect(archiveIn(lanes, 9)).toBeNull();
+  });
+});
+
+describe("reinsertAt", () => {
+  const rest = [lanes[0], lanes[2]];
+
+  it("puts the list back at the front", () => {
+    expect(reinsertAt(rest, lanes[1], 0)).toEqual([lanes[1], lanes[0], lanes[2]]);
+  });
+
+  it("puts the list back in the middle", () => {
+    expect(reinsertAt(rest, lanes[1], 1)).toEqual(lanes);
+  });
+
+  it("puts the list back at the end", () => {
+    expect(reinsertAt(rest, lanes[1], 2)).toEqual([lanes[0], lanes[2], lanes[1]]);
+  });
+
+  it("clamps an index past the end", () => {
+    expect(reinsertAt(rest, lanes[1], 7)).toEqual([lanes[0], lanes[2], lanes[1]]);
+  });
+
+  it("adds no duplicate when the list is already there", () => {
+    expect(reinsertAt(lanes, lanes[1], 0)).toEqual(lanes);
   });
 });
 

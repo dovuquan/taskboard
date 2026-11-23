@@ -15,8 +15,8 @@ describe("Toast", () => {
   });
 
   it("adds an Undo button when there is something to undo", () => {
-    const html = renderToString(<Toast message="Archived Doing." onUndo={() => {}} />);
-    expect(html).toContain("<span>Archived Doing.</span>");
-    expect(html).toMatch(/<button[^>]*type="button"[^>]*>Undo<\/button>/);
+    expect(renderToString(<Toast message="Archived Doing." onUndo={() => {}} />)).toBe(
+      '<div class="toast" role="status"><span>Archived Doing.</span><button type="button">Undo</button></div>',
+    );
   });
 });

@@ -10,7 +10,15 @@ import {
   renameList,
   restoreList,
 } from "../api";
-import { arrange, canAddList, planDrop, revert } from "../lists/logic";
+import {
+  archiveIn,
+  arrange,
+  canAddList,
+  planDrop,
+  reinsertAt,
+  renameIn,
+  revert,
+} from "../lists/logic";
 import {
   LIST_LIMIT_TEXT,
   SEEDED_TEXT,
@@ -376,11 +384,11 @@ export function useLanes({
     const list = current.current.find((l) => l.id === id);
     if (!keep || !list || !name || name === list.name) return;
     const previous = list.name;
-    const set = (to: string, from: string) =>
-      setLists((ls) => ls.map((l) => (l.id === id && l.name === from ? { ...l, name: to } : l)));
+    const set = (to: string, from: string) => setLists((ls) => renameIn(ls, id, from, to));
     set(name, previous);
     void renameList(boardId, id, name).then((res) => {
       if (res.kind === "ok") {
+        set(res.data.name, name);
         notify(renamedText(res.data.name));
         return;
       }
@@ -391,18 +399,16 @@ export function useLanes({
 
   function archive(id: number) {
     setMenu(null);
-    const index = current.current.findIndex((l) => l.id === id);
-    const list = current.current[index];
-    if (!list) return;
-    setLists((ls) => ls.filter((l) => l.id !== id));
+    const archived = archiveIn(current.current, id);
+    if (!archived) return;
+    const { index, list } = archived;
+    setLists((ls) => archiveIn(ls, id)?.next ?? ls);
     void archiveList(boardId, id).then((res) => {
       if (res.kind === "ok") {
         notify(archivedText(list.name), () => void undoArchive(list));
         return;
       }
-      setLists((ls) =>
-        ls.some((l) => l.id === id) ? ls : [...ls.slice(0, index), list, ...ls.slice(index)],
-      );
+      setLists((ls) => reinsertAt(ls, list, index));
       fail(res.kind, changeFailureText(res.kind, true));
     });
   }

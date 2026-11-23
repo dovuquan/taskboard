@@ -29,6 +29,33 @@ export function revert(order: number[], dragId: number, from: number): number[] 
   return next;
 }
 
+/** Renames list `id` to `to`, but only while its name is still `from`. */
+export function renameIn<T extends { id: number; name: string }>(
+  lists: T[],
+  id: number,
+  from: string,
+  to: string,
+): T[] {
+  return lists.map((l) => (l.id === id && l.name === from ? { ...l, name: to } : l));
+}
+
+/** Removes list `id`; returns the rest, where it was and the list, or null if it is not there. */
+export function archiveIn<T extends { id: number }>(
+  lists: T[],
+  id: number,
+): { next: T[]; index: number; list: T } | null {
+  const index = lists.findIndex((l) => l.id === id);
+  if (index < 0) return null;
+  return { next: lists.filter((l) => l.id !== id), index, list: lists[index] };
+}
+
+/** Puts `list` back at `index` (clamped to the end); no change if it is already present. */
+export function reinsertAt<T extends { id: number }>(lists: T[], list: T, index: number): T[] {
+  if (lists.some((l) => l.id === list.id)) return lists;
+  const at = Math.max(0, Math.min(index, lists.length));
+  return [...lists.slice(0, at), list, ...lists.slice(at)];
+}
+
 /** The items in the order given by `ids`; items missing from `ids` are dropped. */
 export function arrange<T extends { id: number }>(items: T[], ids: number[]): T[] {
   const byId = new Map(items.map((item) => [item.id, item]));
