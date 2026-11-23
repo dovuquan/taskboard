@@ -154,6 +154,20 @@ p.lane-form { margin: 0; }
 .lane.dragging { opacity: .45; }
 .lane.lane-drop-before { box-shadow: -4px 0 0 var(--accent); }
 .lanes.lane-drop-end > .add-lane, .lanes.lane-drop-end > .lane-form { box-shadow: -4px 0 0 var(--accent); }
+/* Cards (T11). */
+.lane-head .n { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lane-body.drop-end::after { content: ""; height: 3px; border-radius: 2px; background: var(--accent); }
+.card { background: var(--surface); border-radius: var(--radius-s); box-shadow: var(--shadow-1); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; position: relative; text-align: left; width: 100%; }
+.card[draggable="true"] { cursor: grab; }
+.card.dragging { opacity: .4; }
+.card.drop-before::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 3px; border-radius: 2px; background: var(--accent); }
+.card .title { font-weight: 500; overflow-wrap: anywhere; padding-right: 44px; }
+.card .cid { position: absolute; right: 8px; top: 7px; color: var(--faint); }
+.add-card { border: 0; background: transparent; color: var(--muted); text-align: left; padding: 6px 8px; border-radius: var(--radius-s); cursor: pointer; display: flex; align-items: center; gap: 6px; margin: 0 8px 8px; }
+.add-card:hover { background: var(--surface-3); color: var(--fg); }
+.composer { margin: 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.composer textarea { min-height: 60px; resize: vertical; font: inherit; }
+.composer .row { display: flex; gap: 6px; align-items: center; }
 .pop .item.danger { color: var(--danger); }
 .pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
 .pop .head { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: 4px 8px; font-weight: 600; }
