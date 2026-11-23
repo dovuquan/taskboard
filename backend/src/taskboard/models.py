@@ -2,7 +2,17 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -111,3 +121,22 @@ class BoardList(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime)
     archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class Card(Base):
+    __tablename__ = "cards"
+    __table_args__ = (UniqueConstraint("board_id", "number", name="uq_cards_board_number"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), index=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("lists.id"), index=True)
+    # The board's own running number; the key `TB-<number>` is built, never stored.
+    number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Order within the list; read by (position, id) and never sent to clients.
+    position: Mapped[float] = mapped_column(Float)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)

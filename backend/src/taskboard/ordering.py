@@ -1,9 +1,9 @@
 """Fractional positions for ordered rows: pick a position between two neighbours."""
 
-from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from typing import Any
 
-from taskboard.models import BoardList
+from sqlalchemy import ColumnElement, select, update
+from sqlalchemy.orm import Session
 
 
 class Exhausted(Exception):
@@ -24,14 +24,11 @@ def between(prev: float | None, next_: float | None) -> float:
     return mid
 
 
-def rebalance(session: Session, board_id: int) -> None:
-    """Renumber all of the board's lists, archived included, 1..n in (position, id) order."""
-    ids = session.scalars(
-        select(BoardList.id)
-        .where(BoardList.board_id == board_id)
-        .order_by(BoardList.position, BoardList.id)
-    ).all()
-    for number, list_id in enumerate(ids, start=1):
-        session.execute(
-            update(BoardList).where(BoardList.id == list_id).values(position=float(number))
-        )
+def rebalance(session: Session, model: Any, *where: ColumnElement[bool]) -> None:
+    """Renumber the `model` rows matching `where`, archived included, 1..n by (position, id).
+
+    For lists pass `BoardList.board_id == board_id`; for cards `Card.list_id == list_id`.
+    """
+    ids = session.scalars(select(model.id).where(*where).order_by(model.position, model.id)).all()
+    for number, row_id in enumerate(ids, start=1):
+        session.execute(update(model).where(model.id == row_id).values(position=float(number)))

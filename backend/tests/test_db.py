@@ -38,6 +38,19 @@ COLUMNS = {
         "archived_at",
         "archived_by",
     },
+    "cards": {
+        "id",
+        "board_id",
+        "list_id",
+        "number",
+        "title",
+        "description",
+        "due_at",
+        "position",
+        "created_by",
+        "created_at",
+        "archived_at",
+    },
 }
 
 
@@ -93,6 +106,37 @@ def test_foreign_keys_are_enforced(db_url):
                 "VALUES (999, 'member', '2026-01-01 00:00:00')"
             )
         )
+
+
+def test_a_card_number_is_unique_within_its_board(db_url):
+    run_migrations(db_url)
+    engine = make_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email, created_at) VALUES (1, 'a@example.com', '2026')")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO boards (id, name, visibility, created_by, created_at) "
+                "VALUES (1, 'B', 'workspace', 1, '2026-01-01 00:00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO lists (id, board_id, name, position, created_by, created_at) "
+                "VALUES (1, 1, 'L', 1.0, 1, '2026-01-01 00:00:00')"
+            )
+        )
+    card = (
+        "INSERT INTO cards (board_id, list_id, number, title, position, created_by, created_at) "
+        "VALUES (1, 1, :n, 'T', 1.0, 1, '2026-01-01 00:00:00')"
+    )
+    with engine.begin() as conn:
+        conn.execute(text(card), {"n": 1})
+        conn.execute(text(card), {"n": 2})
+
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text(card), {"n": 1})
 
 
 def test_startup_runs_migrations(db_url):

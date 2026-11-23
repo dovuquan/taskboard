@@ -17,9 +17,10 @@ from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
 from taskboard.auth import get_db
-from taskboard.boards import _RANK, BoardCtx, BoardName, board_access, require_board_role
+from taskboard.boards import BoardCtx, BoardName, ensure_role, require_board_role
+from taskboard.cards import MAX_CARDS, visible_card_count
 from taskboard.events import record_change
-from taskboard.models import BoardList, User, _now
+from taskboard.models import BoardList, _now
 from taskboard.ordering import Exhausted, between, rebalance
 
 router = APIRouter()
@@ -92,19 +93,6 @@ def _active(s: Session, board_id: int) -> list[tuple[int, float]]:
     return [(row_id, position) for row_id, position in s.execute(stmt)]
 
 
-def _ensure_role(s: Session, user: User, board_id: int, min_role: str) -> str:
-    """Inside the transaction, after the write lock is taken: the actor's role as it is now.
-
-    Raises 404 `board_not_found` for an archived or no-longer-visible board, 403 `forbidden`
-    below `min_role`. The identity map is expired first so nothing read earlier is reused.
-    """
-    s.expire_all()
-    role = board_access(s, user, board_id)
-    if _RANK[role] < _RANK[min_role]:
-        raise HTTPException(403, "forbidden")
-    return role
-
-
 def _lock_active_list(s: Session, board_id: int, list_id: int, **values: object) -> None:
     """A conditional UPDATE: it takes the write lock and proves the list is still active."""
     result = s.execute(
@@ -156,7 +144,7 @@ def create_list(body: NameBody, ctx: BoardCtx = _WRITE, db: Session = Depends(ge
                 created_at=_now(),
             )
         )
-        _ensure_role(s, ctx.user, board_id, "member")
+        ensure_role(s, ctx.user, board_id, "member")
         if _active_count(s, board_id) > MAX_LISTS:
             raise ListLimit
         return result.inserted_primary_key[0]
@@ -188,7 +176,7 @@ def rename_list(
 
     def change(s: Session) -> None:
         _lock_active_list(s, board_id, list_id, name=old)
-        _ensure_role(s, ctx.user, board_id, "member")
+        ensure_role(s, ctx.user, board_id, "member")
         s.execute(update(BoardList).where(BoardList.id == list_id).values(name=new))
 
     try:
@@ -219,7 +207,7 @@ def move_list(
 
     def change(s: Session) -> None:
         _lock_active_list(s, board_id, list_id)
-        _ensure_role(s, ctx.user, board_id, "member")
+        ensure_role(s, ctx.user, board_id, "member")
         # Everything below reads the state the lock made current.
         order = _active(s, board_id)
         ids = [row_id for row_id, _ in order]
@@ -263,7 +251,7 @@ def _position_after(s: Session, board_id: int, list_id: int, after_id: int | Non
         try:
             return between(prev, nxt)
         except Exhausted:
-            rebalance(s, board_id)
+            rebalance(s, BoardList, BoardList.board_id == board_id)
     raise RuntimeError("renumbering left no room between two lists")
 
 
@@ -275,7 +263,7 @@ def archive_list(list_id: ListId, ctx: BoardCtx = _WRITE, db: Session = Depends(
 
     def change(s: Session) -> str:
         _lock_active_list(s, board_id, list_id)
-        _ensure_role(s, ctx.user, board_id, "member")
+        ensure_role(s, ctx.user, board_id, "member")
         # The name as of the lock, not as of the earlier read: a rename may have committed since.
         name = s.scalar(select(BoardList.name).where(BoardList.id == list_id))
         s.execute(
@@ -325,11 +313,14 @@ def restore_list(list_id: ListId, ctx: BoardCtx = _WRITE, db: Session = Depends(
         if result.rowcount == 0:
             raise ListGone
         # The role may have changed since the dependency ran; the window applies to non-owners.
-        role = _ensure_role(s, ctx.user, board_id, "member")
+        role = ensure_role(s, ctx.user, board_id, "member")
         if role != "owner" and (archived_by != actor_id or _now() - archived_at > RESTORE_WINDOW):
             raise HTTPException(403, "forbidden")
         if _active_count(s, board_id) > MAX_LISTS:
             raise ListLimit
+        # The restored list brings its cards back: the board's visible total must still fit.
+        if visible_card_count(s, board_id) > MAX_CARDS:
+            raise HTTPException(422, "card_limit")
 
     try:
         record_change(

@@ -3,14 +3,24 @@
 import importlib
 import os
 import time
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
 from sqlalchemy.orm import Session
 
 from taskboard import auth
 from taskboard.db import make_engine
-from taskboard.models import AuthEvent, Board, BoardMember, Event, User, WorkspaceMember
+from taskboard.models import (
+    AuthEvent,
+    Board,
+    BoardList,
+    BoardMember,
+    Card,
+    Event,
+    User,
+    WorkspaceMember,
+)
 
 SESSION_COOKIE = "tb_session"
 FLOW_COOKIE = "tb_flow"
@@ -115,6 +125,87 @@ def set_board_columns(db_url, board_id, **values):
         s.commit()
 
     query(db_url, write)
+
+
+def add_list(db_url, board_id, name, position, *, archived_by=None, archived_at=None):
+    """A list written directly (no event); returns its id."""
+
+    def add(s):
+        row = BoardList(
+            board_id=board_id,
+            name=name,
+            position=position,
+            created_by=archived_by or s.scalar(select(User.id).order_by(User.id)),
+            archived_at=archived_at,
+            archived_by=archived_by,
+        )
+        s.add(row)
+        s.commit()
+        return row.id
+
+    return query(db_url, add)
+
+
+def add_card(
+    db_url,
+    board_id,
+    list_id,
+    title,
+    position,
+    *,
+    archived_at=None,
+    description=None,
+    due_at=None,
+):
+    """A card written directly (no event) that takes the board's next number; returns its id."""
+
+    def add(s):
+        board = s.get(Board, board_id)
+        row = Card(
+            board_id=board_id,
+            list_id=list_id,
+            number=board.next_card_number,
+            title=title,
+            description=description,
+            due_at=due_at,
+            position=position,
+            created_by=board.created_by,
+            archived_at=archived_at,
+        )
+        board.next_card_number += 1
+        s.add(row)
+        s.commit()
+        return row.id
+
+    return query(db_url, add)
+
+
+def add_cards(db_url, board_id, list_id, n):
+    """`n` cards bulk-inserted at the end of a list; the board's counter moves past them."""
+
+    def add(s):
+        board = s.get(Board, board_id)
+        start = board.next_card_number
+        now = datetime.now(UTC).replace(tzinfo=None)
+        s.execute(
+            insert(Card),
+            [
+                {
+                    "board_id": board_id,
+                    "list_id": list_id,
+                    "number": start + i,
+                    "title": f"Card {start + i}",
+                    "position": float(start + i),
+                    "created_by": board.created_by,
+                    "created_at": now,
+                }
+                for i in range(n)
+            ],
+        )
+        board.next_card_number = start + n
+        s.commit()
+
+    query(db_url, add)
 
 
 def interfere(monkeypatch, action, module="boards"):

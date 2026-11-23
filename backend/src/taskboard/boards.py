@@ -134,6 +134,19 @@ def require_board_role(min_role: str):
     return dependency
 
 
+def ensure_role(s: Session, user: User, board_id: int, min_role: str) -> str:
+    """Inside the transaction, after the write lock is taken: the actor's role as it is now.
+
+    Raises 404 `board_not_found` for an archived or no-longer-visible board, 403 `forbidden`
+    below `min_role`. The identity map is expired first so nothing read earlier is reused.
+    """
+    s.expire_all()
+    role = board_access(s, user, board_id)
+    if _RANK[role] < _RANK[min_role]:
+        raise HTTPException(403, "forbidden")
+    return role
+
+
 _OWNER = Depends(require_board_role("owner"))
 
 
