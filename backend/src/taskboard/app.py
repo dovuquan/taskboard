@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from taskboard import auth, boards, members
+from taskboard import auth, boards, lists, members
 from taskboard.db import database_url, make_engine, run_migrations
 from taskboard.settings import allowed_hd
 
@@ -87,6 +87,7 @@ def create_app(url: str | None = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(members.router)
     app.include_router(boards.router)
+    app.include_router(lists.router)
 
     web_dist = _web_dist()
     if web_dist.is_dir():

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String
+from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -97,3 +97,17 @@ class BoardMember(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
     role: Mapped[str] = mapped_column(String)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class BoardList(Base):
+    __tablename__ = "lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    # Order on the board; read by (position, id) and never sent to clients.
+    position: Mapped[float] = mapped_column(Float)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+    archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

@@ -5,12 +5,13 @@ board anyone else is an `observer`; a Private board is a 404 for anyone not on i
 A workspace admin acting as owner is not an owner row, so the last-owner rules ignore them.
 """
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Response
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import case, delete, exists, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -27,7 +28,20 @@ _MAX_ID = 2**63 - 1
 
 BoardId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 UserId = Annotated[int, Path(ge=1, le=_MAX_ID)]
-BoardName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+
+
+def _no_invisible(name: str) -> str:
+    """Reject control (Cc) and format (Cf, such as zero-width) characters anywhere in a name."""
+    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name):
+        raise ValueError("name must not contain control or invisible characters")
+    return name
+
+
+BoardName = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=80),
+    AfterValidator(_no_invisible),
+]
 Visibility = Literal["workspace", "private"]
 BoardRole = Literal["owner", "member", "observer"]
 

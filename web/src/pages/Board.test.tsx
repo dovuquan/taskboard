@@ -95,12 +95,19 @@ describe("BoardView observer banner", () => {
 });
 
 describe("BoardView empty board", () => {
-  it("says there are no lists yet, with the button disabled until lists exist", () => {
+  it("says there are no lists yet, with the button enabled for editors", () => {
     const { html, text } = render();
     expect(text).toContain("This board has no lists yet");
     expect(text).toContain(
       "Lists are the columns cards move through, for example To do, Doing and Done.",
     );
+    const button = html.match(/<button[^>]*>(?:(?!<\/button>)[\s\S])*Add To do, Doing, Done<\/button>/);
+    expect(button).not.toBeNull();
+    expect(button![0]).not.toContain("disabled");
+  });
+
+  it("disables the button while the three lists are being added", () => {
+    const { html } = render({ lanes: { seeding: true } });
     expect(html).toMatch(/<button[^>]*disabled[^>]*>[\s\S]*Add To do, Doing, Done<\/button>/);
   });
 
@@ -108,6 +115,75 @@ describe("BoardView empty board", () => {
     const { html, text } = render({ board: board({ my_role: "observer" }) });
     expect(text).toContain("Ask a board member to add the first lists.");
     expect(html).not.toContain("Add To do, Doing, Done");
+  });
+});
+
+const some = [
+  { id: 11, name: "To do" },
+  { id: 12, name: "Doing" },
+  { id: 13, name: "Done" },
+];
+
+describe("BoardView lanes", () => {
+  it("shows the lanes in the given order and not the empty state", () => {
+    const { html, text } = render({ lists: [some[2], some[0], some[1]] });
+    expect(text).not.toContain("This board has no lists yet");
+    expect(html).toMatch(/aria-label="Done"[\s\S]*aria-label="To do"[\s\S]*aria-label="Doing"/);
+    expect(html).toContain('class="lane"');
+    expect(html).toContain("<h3");
+  });
+
+  it("gives editors the grip, the list menu button and Add list", () => {
+    for (const my_role of ["owner", "member"] as const) {
+      const { html, text } = render({ board: board({ my_role }), lists: some });
+      expect(html).toContain('class="grip"');
+      expect(html).toContain('draggable="true"');
+      expect(html).toContain('aria-label="List actions for Doing"');
+      expect(html).toContain('title="Click to rename"');
+      expect(text).toContain("Add list");
+    }
+  });
+
+  it("gives observers none of those", () => {
+    const { html, text } = render({ board: board({ my_role: "observer" }), lists: some });
+    expect(html).toContain('aria-label="Doing"');
+    expect(html).not.toContain('class="grip"');
+    expect(html).not.toContain("draggable");
+    expect(html).not.toContain("List actions for");
+    expect(html).not.toContain("Click to rename");
+    expect(text).not.toContain("Add list");
+  });
+
+  it("replaces Add list with the limit text at 50 lists", () => {
+    const fifty = Array.from({ length: 50 }, (_, i) => ({ id: i + 1, name: `L${i + 1}` }));
+    const { html, text } = render({ lists: fifty });
+    expect(text).toContain("50 lists is the limit for one board. Archive a list to add another.");
+    expect(html).not.toContain('class="add-lane"');
+    const forty = render({ lists: fifty.slice(0, 49) });
+    expect(forty.html).toContain('class="add-lane"');
+    expect(forty.text).not.toContain("is the limit for one board");
+  });
+
+  it("opens the menu with Rename list and Archive list, and no Add a card yet", () => {
+    const { html, text } = render({ lists: some, lanes: { menu: 12 } });
+    expect(html).toContain('role="menu"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(text).toContain("Rename list");
+    expect(text).toContain("Archive list");
+    expect(text).not.toContain("Add a card");
+  });
+
+  it("shows the rename field for the list being renamed", () => {
+    const { html } = render({ lists: some, lanes: { renaming: 12 } });
+    expect(html).toContain('class="input lane-rename"');
+    expect(html).toContain('value="Doing"');
+    expect(html).toContain('maxLength="80"');
+  });
+
+  it("shows the add form when adding", () => {
+    const { html } = render({ lists: some, lanes: { adding: true } });
+    expect(html).toContain('aria-label="New list name"');
+    expect(html).toContain('placeholder="List name"');
   });
 });
 

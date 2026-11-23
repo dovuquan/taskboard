@@ -1,9 +1,10 @@
 import { type ReactNode, useEffect, useState } from "react";
 
-import { type BoardDetail, type Me, getBoard } from "../api";
+import { type BoardDetail, type BoardList, type Me, getBoard, getLists } from "../api";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
 import { Icon } from "../components/Icon";
+import { type LanesControls, LanesView, useLanes } from "../components/Lanes";
 import { Link } from "../components/Link";
 import { Toast, useToast } from "../components/Toast";
 import { roleChip } from "../boards/logic";
@@ -17,6 +18,9 @@ type ViewProps = {
   board: BoardDetail | null;
   settings?: ReactNode;
   message?: string | null;
+  onUndo?: (() => void) | null;
+  lists?: BoardList[];
+  lanes?: Partial<LanesControls>;
   onRetry?: () => void;
 };
 
@@ -47,7 +51,16 @@ function LoadFailure({ kind, onRetry }: { kind: "network" | "server"; onRetry?: 
   );
 }
 
-export function BoardView({ state, board, settings, message, onRetry }: ViewProps) {
+export function BoardView({
+  state,
+  board,
+  settings,
+  message,
+  onUndo,
+  lists = [],
+  lanes,
+  onRetry,
+}: ViewProps) {
   let content;
   if (state === "ready" && board) {
     const owner = board.my_role === "owner";
@@ -83,24 +96,28 @@ export function BoardView({ state, board, settings, message, onRetry }: ViewProp
             </div>
           )}
         </div>
-        <div className="page gutter">
-          <div className="empty">
-            <h2>This board has no lists yet</h2>
-            <p>Lists are the columns cards move through, for example To do, Doing and Done.</p>
-            {editor ? (
-              <button
-                className="btn primary"
-                type="button"
-                disabled
-                title="Lists arrive in a later step"
-              >
-                <Icon name="plus" /> Add To do, Doing, Done
-              </button>
-            ) : (
-              <p>Ask a board member to add the first lists.</p>
-            )}
+        {lists.length > 0 ? (
+          <LanesView lists={lists} editor={editor} controls={lanes} />
+        ) : (
+          <div className="page gutter">
+            <div className="empty">
+              <h2>This board has no lists yet</h2>
+              <p>Lists are the columns cards move through, for example To do, Doing and Done.</p>
+              {editor ? (
+                <button
+                  className="btn primary"
+                  type="button"
+                  disabled={lanes?.seeding ?? false}
+                  onClick={() => lanes?.onSeed?.()}
+                >
+                  <Icon name="plus" /> Add To do, Doing, Done
+                </button>
+              ) : (
+                <p>Ask a board member to add the first lists.</p>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </>
     );
   } else if (state === "gone") {
@@ -140,7 +157,7 @@ export function BoardView({ state, board, settings, message, onRetry }: ViewProp
     <>
       {content}
       {settings}
-      <Toast message={message ?? null} />
+      <Toast message={message ?? null} onUndo={onUndo} />
     </>
   );
 }
@@ -162,18 +179,32 @@ export function Board({
 }) {
   const [load, setLoad] = useState<Loaded>({ state: "loading", board: null });
   const [attempt, setAttempt] = useState(0);
-  const [message, show] = useToast();
+  const [message, show, undo] = useToast();
+  const [lists, setLists] = useState<BoardList[]>([]);
 
   useEffect(() => {
     let live = true;
     setLoad({ state: "loading", board: null });
-    void getBoard(id).then((res) => {
+    setLists([]);
+    async function fetchAll() {
+      const res = await getBoard(id);
       if (!live) return;
-      if (res.kind === "ok") setLoad({ state: "ready", board: res.data });
-      else if (res.kind === "expired") window.location.reload();
+      if (res.kind === "expired") window.location.reload();
       else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
-      else setLoad({ state: res.kind === "network" ? "network" : "server", board: null });
-    });
+      else if (res.kind !== "ok") {
+        setLoad({ state: res.kind === "network" ? "network" : "server", board: null });
+      } else {
+        const found = await getLists(id);
+        if (!live) return;
+        if (found.kind === "ok") {
+          setLists(found.data);
+          setLoad({ state: "ready", board: res.data });
+        } else if (found.kind === "expired") window.location.reload();
+        else if (found.kind === "not_found") setLoad({ state: "gone", board: null });
+        else setLoad({ state: found.kind === "network" ? "network" : "server", board: null });
+      }
+    }
+    void fetchAll();
     return () => {
       live = false;
     };
@@ -192,6 +223,15 @@ export function Board({
     else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
     else if (res.kind === "expired") window.location.reload();
   }
+
+  const lanes = useLanes({
+    boardId: id,
+    lists,
+    setLists,
+    notify: show,
+    onForbidden: () => void reload(),
+    onGone: () => setLoad({ state: "gone", board: null }),
+  });
 
   const sheet =
     settings && load.state === "ready" && load.board ? (
@@ -212,6 +252,9 @@ export function Board({
       board={load.board}
       settings={sheet}
       message={message}
+      onUndo={undo}
+      lists={lists}
+      lanes={lanes}
       onRetry={() => setAttempt((n) => n + 1)}
     />
   );

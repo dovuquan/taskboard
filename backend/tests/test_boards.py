@@ -4,46 +4,21 @@ import threading
 
 import pytest
 from sqlalchemy import select, update
-from support import events, query, user_by_email
+from support import (
+    add_board,
+    add_user,
+    board_row,
+    events,
+    interfere,
+    query,
+    set_board_columns,
+    user_by_email,
+)
 
-from taskboard.models import Board, BoardMember, User, WorkspaceMember
+from taskboard.models import Board, BoardMember, WorkspaceMember
 
 TILE_KEYS = {"id", "name", "visibility", "my_role", "member_count", "members", "updated_at"}
 PERSON_KEYS = {"id", "name", "email", "avatar_url"}
-
-
-def add_user(db_url, email, role="member", *, pending=False, workspace=True):
-    """A user (and normally their workspace row) written directly; returns the user id."""
-
-    def add(s):
-        user = User(
-            email=email,
-            google_sub=None if pending else f"sub-{email}",
-            name=None if pending else email.split("@")[0].title(),
-        )
-        s.add(user)
-        s.flush()
-        if workspace:
-            s.add(WorkspaceMember(user_id=user.id, role=role))
-        s.commit()
-        return user.id
-
-    return query(db_url, add)
-
-
-def add_board(db_url, creator_id, name="Roadmap", visibility="workspace", members=None):
-    """A board and its member rows written directly (no events); returns the board id."""
-
-    def add(s):
-        board = Board(name=name, visibility=visibility, created_by=creator_id)
-        s.add(board)
-        s.flush()
-        for uid, role in (members or {}).items():
-            s.add(BoardMember(board_id=board.id, user_id=uid, role=role))
-        s.commit()
-        return board.id
-
-    return query(db_url, add)
 
 
 def board_role(db_url, board_id, uid):
@@ -61,10 +36,6 @@ def owners(db_url, board_id):
         BoardMember.board_id == board_id, BoardMember.role == "owner"
     )
     return query(db_url, lambda s: list(s.scalars(stmt)))
-
-
-def board_row(db_url, board_id):
-    return query(db_url, lambda s: s.get(Board, board_id))
 
 
 def iso(dt):
@@ -89,27 +60,6 @@ def set_workspace_role(db_url, uid, role):
         s.commit()
 
     query(db_url, write)
-
-
-def set_board_columns(db_url, board_id, **values):
-    def write(s):
-        s.execute(update(Board).where(Board.id == board_id).values(**values))
-        s.commit()
-
-    query(db_url, write)
-
-
-def interfere(monkeypatch, action):
-    """Run `action` (a direct database write) just before the request's transaction starts."""
-    from taskboard import boards
-
-    real = boards.record_change
-
-    def hooked(session, change, **kw):
-        action()
-        return real(session, change, **kw)
-
-    monkeypatch.setattr(boards, "record_change", hooked)
 
 
 # ---- not signed in, no workspace row --------------------------------------------
@@ -378,6 +328,9 @@ def test_a_failing_create_leaves_no_board_and_no_event(as_user, db_url, monkeypa
         {"name": "x" * 81},
         {"name": ""},
         {"name": "   "},
+        {"name": "​"},
+        {"name": "a\x00b"},
+        {"name": "a⁠b"},
         {},
         {"name": "ok", "visibility": "secret"},
     ],
