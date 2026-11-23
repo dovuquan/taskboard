@@ -28,6 +28,16 @@ COLUMNS = {
         "archived_at",
     },
     "board_members": {"board_id", "user_id", "role", "added_at"},
+    "lists": {
+        "id",
+        "board_id",
+        "name",
+        "position",
+        "created_by",
+        "created_at",
+        "archived_at",
+        "archived_by",
+    },
 }
 
 

@@ -1,15 +1,16 @@
 """Shared test helpers: a fake Google, sign-in, and direct database reads."""
 
+import importlib
 import os
 import time
 from urllib.parse import parse_qs, urlparse
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from taskboard import auth
 from taskboard.db import make_engine
-from taskboard.models import AuthEvent, Event, User
+from taskboard.models import AuthEvent, Board, BoardMember, Event, User, WorkspaceMember
 
 SESSION_COOKIE = "tb_session"
 FLOW_COOKIE = "tb_flow"
@@ -68,6 +69,64 @@ def events(db_url):
 
 def user_by_email(db_url, email):
     return query(db_url, lambda s: s.scalar(select(User).where(User.email == email)))
+
+
+def add_user(db_url, email, role="member", *, pending=False, workspace=True):
+    """A user (and normally their workspace row) written directly; returns the user id."""
+
+    def add(s):
+        user = User(
+            email=email,
+            google_sub=None if pending else f"sub-{email}",
+            name=None if pending else email.split("@")[0].title(),
+        )
+        s.add(user)
+        s.flush()
+        if workspace:
+            s.add(WorkspaceMember(user_id=user.id, role=role))
+        s.commit()
+        return user.id
+
+    return query(db_url, add)
+
+
+def add_board(db_url, creator_id, name="Roadmap", visibility="workspace", members=None):
+    """A board and its member rows written directly (no events); returns the board id."""
+
+    def add(s):
+        board = Board(name=name, visibility=visibility, created_by=creator_id)
+        s.add(board)
+        s.flush()
+        for uid, role in (members or {}).items():
+            s.add(BoardMember(board_id=board.id, user_id=uid, role=role))
+        s.commit()
+        return board.id
+
+    return query(db_url, add)
+
+
+def board_row(db_url, board_id):
+    return query(db_url, lambda s: s.get(Board, board_id))
+
+
+def set_board_columns(db_url, board_id, **values):
+    def write(s):
+        s.execute(update(Board).where(Board.id == board_id).values(**values))
+        s.commit()
+
+    query(db_url, write)
+
+
+def interfere(monkeypatch, action, module="boards"):
+    """Run `action` (a direct database write) just before the request's transaction starts."""
+    mod = importlib.import_module(f"taskboard.{module}")
+    real = mod.record_change
+
+    def hooked(session, change, **kw):
+        action()
+        return real(session, change, **kw)
+
+    monkeypatch.setattr(mod, "record_change", hooked)
 
 
 def begin(client):

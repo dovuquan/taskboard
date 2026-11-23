@@ -226,7 +226,7 @@ def test_a_clashing_user_id_is_reported_without_a_traceback(migrated, monkeypatc
 def test_check_prints_integrity_and_schema_head(migrated, capsys):
     capsys.readouterr()
     assert cli.main(["check"]) == 0
-    assert capsys.readouterr().out == "integrity: ok\nschema: 0002 (head)\n"
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0003 (head)\n"
 
 
 def default_db_path() -> Path:
@@ -293,7 +293,7 @@ def test_check_reports_a_foreign_key_violation(migrated, capsys):
 
     assert cli.main(["check"]) == 1
     assert capsys.readouterr().out == (
-        "integrity: foreign key violation in workspace_members\nschema: 0002 (head)\n"
+        "integrity: foreign key violation in workspace_members\nschema: 0003 (head)\n"
     )
 
 
@@ -302,7 +302,7 @@ def test_check_reports_a_schema_behind_head(migrated, capsys):
     capsys.readouterr()
 
     assert cli.main(["check"]) == 1
-    assert capsys.readouterr().out == "integrity: ok\nschema: 0000 (head is 0002)\n"
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0000 (head is 0003)\n"
 
 
 def test_a_failing_write_leaves_neither_change_nor_event(migrated, monkeypatch):
@@ -327,4 +327,4 @@ def test_entry_point_runs_check(migrated):
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == "integrity: ok\nschema: 0002 (head)\n"
+    assert result.stdout == "integrity: ok\nschema: 0003 (head)\n"
