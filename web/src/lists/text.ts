@@ -1,4 +1,5 @@
 import type { ListError } from "../api";
+import { CARD_LIMIT_TEXT } from "../cards/text";
 import { LIST_LIMIT } from "./logic";
 
 export const LIST_LIMIT_TEXT = `${LIST_LIMIT} lists is the limit for one board. Archive a list to add another.`;
@@ -31,6 +32,8 @@ export function changeFailureText(kind: ListError, undone: boolean): string {
       return "You can no longer change the lists on this board.";
     case "list_limit":
       return LIST_LIMIT_TEXT;
+    case "card_limit":
+      return CARD_LIMIT_TEXT;
     case "list_not_found":
     case "conflict":
       return CHANGED;

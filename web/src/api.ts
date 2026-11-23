@@ -177,13 +177,15 @@ function boardFailure(status: number, body: unknown): BoardError {
 /** A column of a board, as the lists endpoints return it. */
 export type BoardList = { id: number; name: string };
 
-export type ListError = BoardError | "list_limit" | "list_not_found";
+export type ListError = BoardError | "list_limit" | "list_not_found" | "card_limit";
 export type ListsResult<T> = { kind: "ok"; data: T } | { kind: ListError };
 
 function listFailure(status: number, body: unknown): ListError {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (status === 404 && detail === "list_not_found") return "list_not_found";
   if (status === 422 && detail === "list_limit") return "list_limit";
+  // Restoring a list can be refused when its cards would pass the board's card limit.
+  if (status === 422 && detail === "card_limit") return "card_limit";
   return boardFailure(status, body);
 }
 

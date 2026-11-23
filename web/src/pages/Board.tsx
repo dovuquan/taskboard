@@ -10,6 +10,7 @@ import {
   getLists,
 } from "../api";
 import { canAddCard, groupByList, shouldApply } from "../cards/logic";
+import { startBoardPoller } from "../cards/poller";
 import { CARD_LIMIT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
@@ -255,52 +256,31 @@ export function Board({
   // Other people's changes arrive by polling: every 30 s while the tab is visible, and when the
   // tab becomes visible or the window gets focus. One reload at a time.
   useEffect(() => {
-    let live = true;
-    let inflight = false;
-    let again = false;
-    async function reloadAll(explicit: boolean): Promise<void> {
-      if (!ready.current) return;
-      if (inflight) {
-        // A reload that started before a local change would be dropped; ask for a fresh one.
-        if (explicit) again = true;
-        return;
-      }
-      inflight = true;
-      const start = epoch.current;
-      try {
+    const poller = startBoardPoller<Extract<Snapshot, { kind: "ok" }>>({
+      load: async () => {
         const res = await fetchSnapshot(id);
-        if (!live) return;
         if (res.kind === "expired") window.location.reload();
         else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
-        else if (
-          res.kind === "ok" &&
-          shouldApply(start, epoch.current, pending.current, dragging.current)
-        ) {
-          setLists(res.lists);
-          setCards(res.cards);
-          setLoad({ state: "ready", board: res.board });
-        }
-      } finally {
-        inflight = false;
-      }
-      if (again && live) {
-        again = false;
-        await reloadAll(false);
-      }
-    }
-    refreshRef.current = () => reloadAll(true);
-    const onTick = () => {
-      if (!document.hidden) void reloadAll(false);
-    };
-    const onFocus = () => void reloadAll(false);
-    const timer = window.setInterval(onTick, POLL_MS);
-    document.addEventListener("visibilitychange", onTick);
-    window.addEventListener("focus", onFocus);
+        else if (res.kind === "ok") return res;
+        return null;
+      },
+      onResult: (res) => {
+        setLists(res.lists);
+        setCards(res.cards);
+        setLoad({ state: "ready", board: res.board });
+      },
+      epoch: () => epoch.current,
+      canApply: (start) => shouldApply(start, epoch.current, pending.current, dragging.current),
+      enabled: () => ready.current,
+      setInterval: (tick, ms) => window.setInterval(tick, ms),
+      clearInterval: (timer) => window.clearInterval(timer),
+      doc: document,
+      win: window,
+      intervalMs: POLL_MS,
+    });
+    refreshRef.current = poller.refresh;
     return () => {
-      live = false;
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onTick);
-      window.removeEventListener("focus", onFocus);
+      poller.stop();
       refreshRef.current = async () => {};
     };
   }, [id]);

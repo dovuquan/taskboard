@@ -1,5 +1,5 @@
 import type { CardError } from "../api";
-import { CARD_LIMIT } from "./logic";
+import { CARD_LIMIT } from "./limit";
 
 export const CARD_LIMIT_TEXT = `This board has reached ${CARD_LIMIT.toLocaleString("en-US")} cards, the limit for one board. Archive cards to add new ones.`;
 

@@ -415,6 +415,7 @@ describe("lists api", () => {
 
   it.each([
     [422, { detail: "list_limit" }, "list_limit"],
+    [422, { detail: "card_limit" }, "card_limit"],
     [422, { detail: [{ loc: ["body", "name"] }] }, "invalid"],
     [422, { detail: "invalid_anchor" }, "invalid"],
     [404, { detail: "list_not_found" }, "list_not_found"],
@@ -426,6 +427,11 @@ describe("lists api", () => {
   ])("maps %s %j to %s", async (status, body, kind) => {
     stubFetch(async () => reply(status, body));
     expect(await renameList(7, 4, "x")).toEqual({ kind });
+  });
+
+  it("maps a 422 card_limit on restoring a list to card_limit", async () => {
+    stubFetch(async () => reply(422, { detail: "card_limit" }));
+    expect(await restoreList(7, 4)).toEqual({ kind: "card_limit" });
   });
 
   it("reports a network problem when the request throws", async () => {

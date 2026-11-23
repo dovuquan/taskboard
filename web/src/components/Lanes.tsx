@@ -16,19 +16,14 @@ import {
 } from "../api";
 import {
   type ByList,
+  type MovePlan,
+  applyMoveResult,
   canAddCard,
   groupByList,
-  placeCard,
   planCardDrop,
-  revertCardMove,
   ungroup,
 } from "../cards/logic";
-import {
-  CARD_LIMIT_TEXT,
-  cardFailureText,
-  cardMovedText,
-  movedCardText,
-} from "../cards/text";
+import { CARD_LIMIT_TEXT, cardFailureText } from "../cards/text";
 import {
   archiveIn,
   arrange,
@@ -607,11 +602,6 @@ export function useLanes({
     }
   }
 
-  /** Applies `change` to the cards as a grouping and keeps the flat list in step. */
-  function regroup(change: (byList: ByList) => ByList) {
-    setCards((cs) => ungroup(change(groupByList(current.current, cs))));
-  }
-
   async function addCard(listId: number, title: string): Promise<boolean> {
     if (cardBusy.current) return false;
     const total = ungroup(groupByList(current.current, cardsNow.current)).length;
@@ -635,10 +625,6 @@ export function useLanes({
     }
   }
 
-  function listName(id: number): string {
-    return current.current.find((l) => l.id === id)?.name ?? "another list";
-  }
-
   function dropCard(listId: number, index: number) {
     const id = cardDragId;
     endCardDrag();
@@ -646,22 +632,15 @@ export function useLanes({
     const plan = planCardDrop(groupByList(current.current, cardsNow.current), id, listId, index);
     if (!plan) return;
     const key = cardsNow.current.find((c) => c.id === id)?.key ?? "";
-    const { move } = plan;
+    const movePlan: MovePlan = { cardId: id, key, move: plan.move };
     setCards(() => ungroup(plan.next));
-    void track(moveCard(boardId, id, move)).then((res) => {
-      if (res.kind === "ok") {
-        setCards((cs) => cs.map((c) => (c.id === id ? res.data : c)));
-        notify(movedCardText(key, listName(listId)));
-        return;
-      }
-      if (res.kind === "card_moved") {
-        regroup((by) => placeCard(by, res.card, res.after_id));
-        notify(cardMovedText(res.moved_by, listName(res.card.list_id)));
-        void refresh();
-        return;
-      }
-      regroup((by) => revertCardMove(by, id, move.from_list_id, move.from_after_id));
-      failCard(res.kind, cardFailureText(res.kind, true));
+    void track(moveCard(boardId, id, plan.move)).then((res) => {
+      const apply = (cs: Card[]) => applyMoveResult(cs, current.current, movePlan, res);
+      const out = apply(cardsNow.current);
+      setCards((cs) => apply(cs).cards);
+      if (res.kind === "ok" || res.kind === "card_moved") notify(out.toast);
+      else failCard(res.kind, out.toast);
+      if (out.reload) void refresh();
     });
   }
 

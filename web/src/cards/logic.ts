@@ -1,6 +1,8 @@
-import type { Card, CardMove } from "../api";
+import type { Card, CardMove, MoveResult } from "../api";
+import { CARD_LIMIT } from "./limit";
+import { cardFailureText, cardMovedText, movedCardText } from "./text";
 
-export const CARD_LIMIT = 1000;
+export { CARD_LIMIT };
 
 /** True while the board can take another card. */
 export function canAddCard(total: number): boolean {
@@ -102,6 +104,52 @@ export function revertCardMove(
 /** Puts the server's copy of `card` where the server says it is now. */
 export function placeCard(byList: ByList, card: Card, afterId: number | null): ByList {
   return insertAfter(without(byList, card.id), card, afterId);
+}
+
+/** A card drop that was sent to the server: which card, its key, and what was asked. */
+export type MovePlan = { cardId: number; key: string; move: CardMove };
+
+export type MoveOutcome = {
+  cards: Card[];
+  /** What to tell the person. For a failure it is the "undone" text; the caller decides to show it. */
+  toast: string;
+  /** True when the screen should be reloaded to catch up with the server. */
+  reload: boolean;
+};
+
+/**
+ * What the server's answer to a card drop does to the cards on screen (`cards` already show the
+ * drop). Success keeps the server's copy; "moved" puts the card where the server has it; any other
+ * failure takes the card back to where it came from.
+ */
+export function applyMoveResult(
+  cards: Card[],
+  lists: { id: number; name: string }[],
+  plan: MovePlan,
+  result: MoveResult,
+): MoveOutcome {
+  const listName = (id: number) => lists.find((l) => l.id === id)?.name ?? "another list";
+  if (result.kind === "ok") {
+    return {
+      cards: cards.map((c) => (c.id === plan.cardId ? result.data : c)),
+      toast: movedCardText(plan.key, listName(plan.move.list_id)),
+      reload: false,
+    };
+  }
+  const byList = groupByList(lists, cards);
+  if (result.kind === "card_moved") {
+    return {
+      cards: ungroup(placeCard(byList, result.card, result.after_id)),
+      toast: cardMovedText(result.moved_by, listName(result.card.list_id)),
+      reload: true,
+    };
+  }
+  const { from_list_id, from_after_id } = plan.move;
+  return {
+    cards: ungroup(revertCardMove(byList, plan.cardId, from_list_id, from_after_id)),
+    toast: cardFailureText(result.kind, true),
+    reload: false,
+  };
 }
 
 /** Line breaks (Shift+Enter) become single spaces; the ends are trimmed. */
