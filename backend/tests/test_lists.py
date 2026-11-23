@@ -143,6 +143,8 @@ def test_valid_names_are_accepted_and_trimmed(as_user, db_url, name):
         {"name": " ​‌‍⁠﻿ "},
         {"name": "a\x00b"},
         {"name": "a\nb"},
+        {"name": "⠀"},
+        {"name": "ab"},
         {},
     ],
 )

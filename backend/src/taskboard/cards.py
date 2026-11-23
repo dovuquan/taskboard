@@ -153,9 +153,10 @@ def _check_limit(s: Session, board_id: int) -> None:
         raise HTTPException(422, "card_limit")
 
 
-def _moved_by(s: Session, card_id: int) -> str | None:
-    actor_id = s.scalar(
-        select(Event.actor_id)
+def _moved_by(s: Session, card_id: int, list_id: int, after_id: int | None) -> str | None:
+    """Who moved the card, only if their latest move describes where the card is now."""
+    row = s.execute(
+        select(Event.actor_id, Event.data)
         .where(
             Event.kind == "card.moved",
             Event.subject_type == "card",
@@ -163,8 +164,15 @@ def _moved_by(s: Session, card_id: int) -> str | None:
         )
         .order_by(Event.id.desc())
         .limit(1)
-    )
-    return None if actor_id is None else s.scalar(select(User.name).where(User.id == actor_id))
+    ).first()
+    if row is None:
+        return None
+    actor_id, data = row
+    if not isinstance(data, dict):
+        return None
+    if data.get("to_list_id") != list_id or data.get("after_id") != after_id:
+        return None
+    return s.scalar(select(User.name).where(User.id == actor_id))
 
 
 @router.get("/api/boards/{board_id}/cards")
@@ -270,7 +278,7 @@ def move_card(
                     "detail": "card_moved",
                     "card": _card_out(prefix, card),
                     "after_id": current[1],
-                    "moved_by": _moved_by(s, card_id),
+                    "moved_by": _moved_by(s, card_id, *current),
                 }
             )
         others = [i for i, _ in _visible_in_list(s, list_id) if i != card_id]
@@ -325,7 +333,7 @@ def copy_card(
         prefix, number = _new_number(s, board_id)
         title = source.title
         if len(title) + len(_COPY_SUFFIX) > _TITLE_MAX:
-            title = title[: _TITLE_MAX - len(_COPY_SUFFIX)]
+            title = title[: _TITLE_MAX - len(_COPY_SUFFIX)].rstrip()
         title += _COPY_SUFFIX
         position = _position_after(s, source.list_id, source.id, None)
         result = s.execute(

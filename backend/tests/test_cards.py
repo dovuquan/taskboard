@@ -188,6 +188,15 @@ def test_valid_titles_are_accepted_and_trimmed(as_user, db_url, title):
         {"title": "a\x00b"},
         {"title": "a\nb"},
         {"title": "​"},
+        {"title": "ㅤ"},
+        {"title": "ᅟ"},
+        {"title": "ᅠ"},
+        {"title": "ﾠ"},
+        {"title": "⠀"},
+        {"title": "a b"},
+        {"title": "a b"},
+        {"title": "ab"},
+        {"title": "a͸b"},
         {"title": "ok", "position": 3},
         {"title": 5},
     ],
@@ -255,9 +264,16 @@ def test_archived_cards_and_cards_in_archived_lists_do_not_count(as_user, db_url
     add_card(db_url, board_id, list_id, "archived", 5000.0, archived_at=_now())
     add_card(db_url, board_id, hidden, "hidden", 1.0)
 
+    before = len(events(db_url))
+
     response = client.post(url(board_id), json={"list_id": list_id, "title": "Fits"})
 
     assert response.status_code == 201
+    body = response.json()
+    assert body == {"id": body["id"], "key": body["key"], "list_id": list_id, "title": "Fits"}
+    [event] = events(db_url)[before:]
+    assert (event.kind, event.subject_id) == ("card.created", str(body["id"]))
+    assert event.data == {"key": body["key"], "title": "Fits", "list_id": list_id}
 
 
 def test_two_creates_for_the_1000th_card_let_one_through(as_user, db_url):
@@ -518,7 +534,7 @@ def test_a_malformed_move_is_rejected(as_user, db_url, body):
     assert len(events(db_url)) == before
 
 
-def _relocate(db_url, card_id, list_id, position, *, by=None, board_id=None):
+def _relocate(db_url, card_id, list_id, position, *, by=None, board_id=None, after_id=None):
     """A direct move by someone else, with the event a real move would have written."""
 
     def write(s):
@@ -530,7 +546,7 @@ def _relocate(db_url, card_id, list_id, position, *, by=None, board_id=None):
                     kind="card.moved",
                     subject_type="card",
                     subject_id=str(card_id),
-                    data={},
+                    data={"to_list_id": list_id, "after_id": after_id},
                     board_id=board_id,
                 )
             )
@@ -581,8 +597,62 @@ def test_a_stale_move_reports_the_card_above_and_no_name_without_an_event(
     )
 
     assert response.status_code == 409
-    assert response.json()["after_id"] == cards["b1"]
-    assert response.json()["moved_by"] is None
+    assert response.json() == {
+        "detail": "card_moved",
+        "card": {"id": cards["a1"], "key": "TB-1", "list_id": lists["B"], "title": "a1"},
+        "after_id": cards["b1"],
+        "moved_by": None,
+    }
+    row = card_row(db_url, cards["a1"])
+    assert (row.list_id, row.position) == (lists["B"], 1.5)
+    assert len(events(db_url)) == before
+
+
+@pytest.mark.parametrize("neighbour", ["copy", "move"])
+def test_a_neighbour_changing_makes_the_next_drag_stale_with_no_name(as_user, db_url, neighbour):
+    client, _ada, board_id, _unused = board_with(as_user, db_url)
+    lists, cards, _layout = two_lists(db_url, board_id)
+    la = lists["A"]
+    # a3 is really moved (so it has a card.moved event) and ends up right after a2
+    assert (
+        client.post(
+            url(board_id, cards["a3"], "move"), json=move_body(la, None, la, cards["a2"])
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            url(board_id, cards["a3"], "move"), json=move_body(la, cards["a2"], la, None)
+        ).status_code
+        == 200
+    )
+    if neighbour == "copy":
+        response = client.post(url(board_id, cards["a2"], "copy"), json={})
+        assert response.status_code == 201
+        new_predecessor = response.json()["id"]
+    else:
+        response = client.post(
+            url(board_id, cards["a1"], "move"),
+            json=move_body(la, cards["a2"], la, None),
+        )
+        assert response.status_code == 200
+        new_predecessor = cards["a1"]
+    rows = card_rows(db_url, board_id)
+    before = len(events(db_url))
+
+    response = client.post(
+        url(board_id, cards["a3"], "move"),
+        json=move_body(la, None, la, cards["a2"]),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "card_moved",
+        "card": {"id": cards["a3"], "key": "TB-3", "list_id": la, "title": "a3"},
+        "after_id": new_predecessor,
+        "moved_by": None,
+    }
+    assert card_rows(db_url, board_id) == rows
     assert len(events(db_url)) == before
 
 
@@ -598,7 +668,14 @@ def test_a_move_someone_else_already_made_is_ok_and_writes_no_event(as_user, db_
     )
 
     assert response.status_code == 200
-    assert response.json()["list_id"] == lists["B"]
+    assert response.json() == {
+        "id": cards["a1"],
+        "key": "TB-1",
+        "list_id": lists["B"],
+        "title": "a1",
+    }
+    row = card_row(db_url, cards["a1"])
+    assert (row.list_id, row.position) == (lists["B"], 0.5)
     assert len(events(db_url)) == before
 
 
@@ -653,12 +730,32 @@ def test_copy_places_the_new_card_after_the_source(as_user, db_url):
 def test_copy_cuts_a_long_title_so_the_copy_is_exactly_200(as_user, db_url):
     client, _ada, board_id, list_id = board_with(as_user, db_url)
     source = add_card(db_url, board_id, list_id, "x" * 200, 1.0)
+    before = len(events(db_url))
 
     response = client.post(url(board_id, source, "copy"), json={})
 
     assert response.status_code == 201
-    assert response.json()["title"] == "x" * 193 + " (copy)"
-    assert len(response.json()["title"]) == 200
+    body = response.json()
+    assert body == {
+        "id": body["id"],
+        "key": "TB-2",
+        "list_id": list_id,
+        "title": "x" * 193 + " (copy)",
+    }
+    assert len(body["title"]) == 200
+    [event] = events(db_url)[before:]
+    assert (event.kind, event.subject_id) == ("card.copied", str(body["id"]))
+    assert event.data == {"key": "TB-2", "from_key": "TB-1"}
+
+
+def test_copy_drops_the_space_left_at_the_cut(as_user, db_url):
+    client, _ada, board_id, list_id = board_with(as_user, db_url)
+    source = add_card(db_url, board_id, list_id, "x" * 192 + " " + "y" * 7, 1.0)
+
+    response = client.post(url(board_id, source, "copy"), json={})
+
+    assert response.status_code == 201
+    assert response.json()["title"] == "x" * 192 + " (copy)"
 
 
 def test_copy_with_a_used_up_gap_renumbers_and_places_it(as_user, db_url):
@@ -826,6 +923,35 @@ def test_role_matrix(as_user, db_url, action, actor, visibility):
         else:
             [event] = events(db_url)[before:]
             assert event.actor_id == actor_id and event.board_id == board_id
+            body = response.json()
+            key = body["key"]
+            if action == "create":
+                assert body == {
+                    "id": body["id"],
+                    "key": f"TB-{start}",
+                    "list_id": list_id,
+                    "title": "New",
+                }
+                assert (event.kind, event.subject_id) == ("card.created", str(body["id"]))
+                assert event.data == {"key": key, "title": "New", "list_id": list_id}
+            elif action == "move":
+                assert body == {"id": ids[0], "key": "TB-1", "list_id": list_id, "title": "A"}
+                assert (event.kind, event.subject_id) == ("card.moved", str(ids[0]))
+                assert event.data == {
+                    "key": "TB-1",
+                    "from_list_id": list_id,
+                    "to_list_id": list_id,
+                    "after_id": ids[1],
+                }
+            else:
+                assert body == {
+                    "id": body["id"],
+                    "key": f"TB-{start}",
+                    "list_id": list_id,
+                    "title": "A (copy)",
+                }
+                assert (event.kind, event.subject_id) == ("card.copied", str(body["id"]))
+                assert event.data == {"key": key, "from_key": "TB-1"}
     else:
         assert response.status_code == expected, response.text
         assert response.json() == {"detail": "forbidden" if expected == 403 else "board_not_found"}

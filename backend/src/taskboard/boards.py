@@ -30,9 +30,14 @@ BoardId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 UserId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 
 
+_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cs", "Cn"})
+_BLANKS = frozenset("ᅟᅠㅤﾠ⠀")
+
+
 def _no_invisible(name: str) -> str:
-    """Reject control (Cc) and format (Cf, such as zero-width) characters anywhere in a name."""
-    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name):
+    """Reject control, format, separator, private-use, surrogate, unassigned and blank-looking
+    characters anywhere in a name."""
+    if any(unicodedata.category(ch) in _BAD_CATEGORIES or ch in _BLANKS for ch in name):
         raise ValueError("name must not contain control or invisible characters")
     return name
 
