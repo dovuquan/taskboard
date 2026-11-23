@@ -174,7 +174,25 @@ function boardFailure(status: number, body: unknown): BoardError {
   return failure(status);
 }
 
-async function call<T>(method: string, url: string, body?: unknown): Promise<BoardResult<T>> {
+/** A column of a board, as the lists endpoints return it. */
+export type BoardList = { id: number; name: string };
+
+export type ListError = BoardError | "list_limit" | "list_not_found";
+export type ListsResult<T> = { kind: "ok"; data: T } | { kind: ListError };
+
+function listFailure(status: number, body: unknown): ListError {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (status === 404 && detail === "list_not_found") return "list_not_found";
+  if (status === 422 && detail === "list_limit") return "list_limit";
+  return boardFailure(status, body);
+}
+
+async function callWith<E extends string, T>(
+  map: (status: number, body: unknown) => E,
+  method: string,
+  url: string,
+  body?: unknown,
+): Promise<{ kind: "ok"; data: T } | { kind: E }> {
   const init: RequestInit =
     body === undefined
       ? { ...INIT, method }
@@ -185,12 +203,20 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<Boa
           body: JSON.stringify(body),
         };
   const res = await send(url, init);
-  if (!res) return { kind: "network" };
+  if (!res) return { kind: "network" } as { kind: E };
   if (res.status === 204) return { kind: "ok", data: undefined as T };
   if (res.status === 200 || res.status === 201) {
-    return res.body === null ? { kind: "server" } : { kind: "ok", data: res.body as T };
+    return res.body === null ? ({ kind: "server" } as { kind: E }) : { kind: "ok", data: res.body as T };
   }
-  return { kind: boardFailure(res.status, res.body) };
+  return { kind: map(res.status, res.body) };
+}
+
+function call<T>(method: string, url: string, body?: unknown): Promise<BoardResult<T>> {
+  return callWith<BoardError, T>(boardFailure, method, url, body);
+}
+
+function callList<T>(method: string, url: string, body?: unknown): Promise<ListsResult<T>> {
+  return callWith<ListError, T>(listFailure, method, url, body);
 }
 
 export const getBoards = () => call<Tile[]>("GET", "/api/boards");
@@ -210,6 +236,20 @@ export const setBoardRole = (id: number, userId: number, role: BoardRole) =>
   call<BoardMember>("PATCH", `/api/boards/${id}/members/${userId}`, { role });
 export const removeBoardMember = (id: number, userId: number) =>
   call<undefined>("DELETE", `/api/boards/${id}/members/${userId}`);
+
+export const getLists = (boardId: number) =>
+  callList<BoardList[]>("GET", `/api/boards/${boardId}/lists`);
+export const createList = (boardId: number, name: string) =>
+  callList<BoardList>("POST", `/api/boards/${boardId}/lists`, { name });
+export const renameList = (boardId: number, listId: number, name: string) =>
+  callList<BoardList>("PATCH", `/api/boards/${boardId}/lists/${listId}`, { name });
+/** `afterId` is the list the moved one should follow; null puts it first. */
+export const moveList = (boardId: number, listId: number, afterId: number | null) =>
+  callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/move`, { after_id: afterId });
+export const archiveList = (boardId: number, listId: number) =>
+  callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/archive`);
+export const restoreList = (boardId: number, listId: number) =>
+  callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/restore`);
 
 export async function getMemberCount(): Promise<number | null> {
   try {

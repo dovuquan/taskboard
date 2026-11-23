@@ -2,8 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   addBoardMember,
+  archiveList,
   createBoard,
+  createList,
   getBoard,
+  getLists,
+  moveList,
+  renameList,
+  restoreList,
   getBoardMembers,
   getBoards,
   getConfig,
@@ -343,6 +349,84 @@ describe("boards api", () => {
   it("reports a server problem when a 200 has no body", async () => {
     stubFetch(async () => new Response("", { status: 200 }));
     expect(await getBoard(7)).toEqual({ kind: "server" });
+  });
+});
+
+describe("lists api", () => {
+  const list = { id: 4, name: "Doing" };
+
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("reads the lists of a board", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [list]));
+    expect(await getLists(7)).toEqual({ kind: "ok", data: [list] });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists");
+    expect(init.method).toBe("GET");
+  });
+
+  it("creates a list and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, list));
+    expect(await createList(7, "Doing")).toEqual({ kind: "ok", data: list });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"name":"Doing"}');
+  });
+
+  it("renames a list with PATCH", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await renameList(7, 4, "Doing now");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists/4");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"name":"Doing now"}');
+  });
+
+  it("moves a list after an anchor, or to the front with null", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await moveList(7, 4, 2);
+    await moveList(7, 4, null);
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/lists/4/move");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBe('{"after_id":2}');
+    expect(lastCall(fetchMock, 1)[1].body).toBe('{"after_id":null}');
+  });
+
+  it("archives and restores with POST and no body", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await archiveList(7, 4);
+    expect(await restoreList(7, 4)).toEqual({ kind: "ok", data: list });
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/lists/4/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    const second = lastCall(fetchMock, 1);
+    expect(second[0]).toBe("/api/boards/7/lists/4/restore");
+    expect(second[1].method).toBe("POST");
+  });
+
+  it.each([
+    [422, { detail: "list_limit" }, "list_limit"],
+    [422, { detail: [{ loc: ["body", "name"] }] }, "invalid"],
+    [422, { detail: "invalid_anchor" }, "invalid"],
+    [404, { detail: "list_not_found" }, "list_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "conflict" }, "conflict"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await renameList(7, 4, "x")).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getLists(7)).toEqual({ kind: "network" });
   });
 });
 

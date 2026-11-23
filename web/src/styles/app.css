@@ -133,3 +133,32 @@ table.people td.wrap { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .me small { display: none; }
 }
+
+/* Lanes (T10). */
+.lanes-wrap { flex: 1; min-height: 0; overflow-x: auto; padding-bottom: var(--s4); }
+.lanes { display: flex; gap: var(--s3); align-items: flex-start; min-height: 100%; }
+.lane { background: var(--surface-2); border-radius: var(--radius-m); width: 272px; flex: none; display: flex; flex-direction: column; max-height: calc(100vh - 230px); }
+.lane-head { display: flex; align-items: center; gap: var(--s2); padding: 10px 10px 6px 12px; position: relative; }
+.lane-head h3 { flex: 1; font-size: 14px; overflow-wrap: anywhere; }
+.lane-head h3[title] { cursor: text; }
+.lane-body { padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 24px; }
+.add-lane { width: 272px; flex: none; border: 1.5px dashed var(--line); border-radius: var(--radius-m); background: transparent; padding: 12px; color: var(--muted); cursor: pointer; text-align: left; display: flex; gap: 6px; align-items: center; }
+.add-lane:hover { color: var(--fg); border-color: var(--muted); }
+.lane-rename { flex: 1; font-weight: 600; }
+.lane-form { width: 272px; flex: none; background: var(--surface-2); border-radius: var(--radius-m); padding: 8px; display: flex; flex-direction: column; gap: 6px; align-self: flex-start; }
+.lane-form .row { display: flex; gap: 6px; align-items: center; }
+p.lane-form { margin: 0; }
+.lane-head[draggable="true"] { cursor: grab; }
+.lane-head .grip { color: var(--faint); display: grid; margin-left: -6px; }
+.lane-head .grip .i { width: 14px; height: 14px; }
+.lane.dragging { opacity: .45; }
+.lane.lane-drop-before { box-shadow: -4px 0 0 var(--accent); }
+.lanes.lane-drop-end > .add-lane, .lanes.lane-drop-end > .lane-form { box-shadow: -4px 0 0 var(--accent); }
+.pop .item.danger { color: var(--danger); }
+.pop hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; width: 100%; }
+.pop .head { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); padding: 4px 8px; font-weight: 600; }
+.toast { padding: 10px 12px 10px 16px; }
+.toast button { background: transparent; border: 1px solid color-mix(in srgb, var(--bg) 40%, transparent); color: var(--bg); border-radius: var(--radius-s); padding: 3px 10px; cursor: pointer; font-weight: 600; }
+@media (max-width: 760px) {
+  .lane { max-height: none; }
+}
