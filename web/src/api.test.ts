@@ -3,9 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addBoardMember,
   archiveList,
+  copyCard,
   createBoard,
+  createCard,
   createList,
   getBoard,
+  getCards,
+  moveCard,
   getLists,
   moveList,
   renameList,
@@ -411,6 +415,7 @@ describe("lists api", () => {
 
   it.each([
     [422, { detail: "list_limit" }, "list_limit"],
+    [422, { detail: "card_limit" }, "card_limit"],
     [422, { detail: [{ loc: ["body", "name"] }] }, "invalid"],
     [422, { detail: "invalid_anchor" }, "invalid"],
     [404, { detail: "list_not_found" }, "list_not_found"],
@@ -424,9 +429,114 @@ describe("lists api", () => {
     expect(await renameList(7, 4, "x")).toEqual({ kind });
   });
 
+  it("maps a 422 card_limit on restoring a list to card_limit", async () => {
+    stubFetch(async () => reply(422, { detail: "card_limit" }));
+    expect(await restoreList(7, 4)).toEqual({ kind: "card_limit" });
+  });
+
   it("reports a network problem when the request throws", async () => {
     throwing();
     expect(await getLists(7)).toEqual({ kind: "network" });
+  });
+});
+
+describe("cards api", () => {
+  const card = { id: 9, key: "TB-9", list_id: 4, title: "Pack boxes" };
+  const move = { list_id: 4, after_id: null, from_list_id: 3, from_after_id: 8 };
+
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("reads the cards of a board", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [card]));
+    expect(await getCards(7)).toEqual({ kind: "ok", data: [card] });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("creates a card and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, card));
+    expect(await createCard(7, 4, "Pack boxes")).toEqual({ kind: "ok", data: card });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"list_id":4,"title":"Pack boxes"}');
+  });
+
+  it("moves a card with all four fields, nulls included", async () => {
+    const fetchMock = stubFetch(async () => reply(200, card));
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "ok", data: card });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9/move");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"list_id":4,"after_id":null,"from_list_id":3,"from_after_id":8}');
+  });
+
+  it("maps 409 card_moved to the card, its place and who moved it", async () => {
+    stubFetch(async () =>
+      reply(409, { detail: "card_moved", card, after_id: 5, moved_by: "Duc Le" }),
+    );
+    expect(await moveCard(7, 9, move)).toEqual({
+      kind: "card_moved",
+      card,
+      after_id: 5,
+      moved_by: "Duc Le",
+    });
+  });
+
+  it("keeps a null after_id and a null name on 409 card_moved", async () => {
+    stubFetch(async () =>
+      reply(409, { detail: "card_moved", card, after_id: null, moved_by: null }),
+    );
+    expect(await moveCard(7, 9, move)).toEqual({
+      kind: "card_moved",
+      card,
+      after_id: null,
+      moved_by: null,
+    });
+  });
+
+  it("reports a 409 card_moved without a card as a server problem", async () => {
+    stubFetch(async () => reply(409, { detail: "card_moved" }));
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "server" });
+  });
+
+  it("copies a card with POST and an empty JSON body", async () => {
+    const copy = { id: 10, key: "TB-10", list_id: 4, title: "Pack boxes (copy)" };
+    const fetchMock = stubFetch(async () => reply(201, copy));
+    expect(await copyCard(7, 9)).toEqual({ kind: "ok", data: copy });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9/copy");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe("{}");
+  });
+
+  it.each([
+    [422, { detail: "card_limit" }, "card_limit"],
+    [422, { detail: [{ loc: ["body", "title"] }] }, "invalid"],
+    [422, { detail: "invalid_anchor" }, "invalid"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "list_not_found" }, "list_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "conflict" }, "conflict"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await createCard(7, 4, "x")).toEqual({ kind });
+    expect(await moveCard(7, 9, move)).toEqual({ kind });
+    expect(await copyCard(7, 9)).toEqual({ kind });
+    expect(await getCards(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getCards(7)).toEqual({ kind: "network" });
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "network" });
   });
 });
 

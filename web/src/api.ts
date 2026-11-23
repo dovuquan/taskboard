@@ -177,13 +177,15 @@ function boardFailure(status: number, body: unknown): BoardError {
 /** A column of a board, as the lists endpoints return it. */
 export type BoardList = { id: number; name: string };
 
-export type ListError = BoardError | "list_limit" | "list_not_found";
+export type ListError = BoardError | "list_limit" | "list_not_found" | "card_limit";
 export type ListsResult<T> = { kind: "ok"; data: T } | { kind: ListError };
 
 function listFailure(status: number, body: unknown): ListError {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (status === 404 && detail === "list_not_found") return "list_not_found";
   if (status === 422 && detail === "list_limit") return "list_limit";
+  // Restoring a list can be refused when its cards would pass the board's card limit.
+  if (status === 422 && detail === "card_limit") return "card_limit";
   return boardFailure(status, body);
 }
 
@@ -250,6 +252,81 @@ export const archiveList = (boardId: number, listId: number) =>
   callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/archive`);
 export const restoreList = (boardId: number, listId: number) =>
   callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/restore`);
+
+/** A card as the cards endpoints return it; `key` is the server's TB-n. */
+export type Card = { id: number; key: string; list_id: number; title: string };
+
+export type CardError = BoardError | "card_limit" | "card_not_found" | "list_not_found";
+export type CardsResult<T> = { kind: "ok"; data: T } | { kind: CardError };
+
+/** What a drop tells the server: where the card goes and where it was, for the stale check. */
+export type CardMove = {
+  list_id: number;
+  after_id: number | null;
+  from_list_id: number;
+  from_after_id: number | null;
+};
+
+/** The 409 answer: someone else moved the card first; `card` and `after_id` say where it is now. */
+export type CardMoved = {
+  kind: "card_moved";
+  card: Card;
+  after_id: number | null;
+  moved_by: string | null;
+};
+export type MoveResult = CardsResult<Card> | CardMoved;
+
+function cardFailure(status: number, body: unknown): CardError {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (status === 404 && detail === "card_not_found") return "card_not_found";
+  if (status === 404 && detail === "list_not_found") return "list_not_found";
+  if (status === 422 && detail === "card_limit") return "card_limit";
+  return boardFailure(status, body);
+}
+
+function callCard<T>(method: string, url: string, body?: unknown): Promise<CardsResult<T>> {
+  return callWith<CardError, T>(cardFailure, method, url, body);
+}
+
+export const getCards = (boardId: number) =>
+  callCard<Card[]>("GET", `/api/boards/${boardId}/cards`);
+export const createCard = (boardId: number, listId: number, title: string) =>
+  callCard<Card>("POST", `/api/boards/${boardId}/cards`, { list_id: listId, title });
+export const copyCard = (boardId: number, cardId: number) =>
+  callCard<Card>("POST", `/api/boards/${boardId}/cards/${cardId}/copy`, {});
+
+export async function moveCard(boardId: number, cardId: number, move: CardMove): Promise<MoveResult> {
+  const res = await send(`/api/boards/${boardId}/cards/${cardId}/move`, {
+    ...INIT,
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      list_id: move.list_id,
+      after_id: move.after_id,
+      from_list_id: move.from_list_id,
+      from_after_id: move.from_after_id,
+    }),
+  });
+  if (!res) return { kind: "network" };
+  const body = res.body as {
+    detail?: unknown;
+    card?: Card;
+    after_id?: number | null;
+    moved_by?: string | null;
+  } | null;
+  if (res.status === 200) {
+    return body ? { kind: "ok", data: body as unknown as Card } : { kind: "server" };
+  }
+  if (res.status === 409 && body?.detail === "card_moved" && body.card) {
+    return {
+      kind: "card_moved",
+      card: body.card,
+      after_id: body.after_id ?? null,
+      moved_by: body.moved_by ?? null,
+    };
+  }
+  return { kind: cardFailure(res.status, res.body) };
+}
 
 export async function getMemberCount(): Promise<number | null> {
   try {

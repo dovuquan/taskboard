@@ -333,6 +333,8 @@ def test_a_failing_create_leaves_no_board_and_no_event(as_user, db_url, monkeypa
         {"name": "a⁠b"},
         {},
         {"name": "ok", "visibility": "secret"},
+        {"name": "ㅤ"},
+        {"name": "a b"},
     ],
 )
 def test_create_validates_the_body(as_user, db_url, body):

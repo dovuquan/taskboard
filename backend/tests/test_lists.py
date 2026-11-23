@@ -8,6 +8,9 @@ import pytest
 from sqlalchemy import select, update
 from support import (
     add_board,
+    add_card,
+    add_cards,
+    add_list,
     add_user,
     events,
     interfere,
@@ -17,31 +20,6 @@ from support import (
 )
 
 from taskboard.models import BoardList, BoardMember, _now
-
-
-def add_list(db_url, board_id, name, position, *, archived_by=None, archived_at=None):
-    """A list written directly (no event); returns its id."""
-
-    def add(s):
-        row = BoardList(
-            board_id=board_id,
-            name=name,
-            position=position,
-            created_by=archived_by or _first_user(s),
-            archived_at=archived_at,
-            archived_by=archived_by,
-        )
-        s.add(row)
-        s.commit()
-        return row.id
-
-    return query(db_url, add)
-
-
-def _first_user(s):
-    from taskboard.models import User
-
-    return s.scalar(select(User.id).order_by(User.id))
 
 
 def list_row(db_url, list_id):
@@ -165,6 +143,8 @@ def test_valid_names_are_accepted_and_trimmed(as_user, db_url, name):
         {"name": " ​‌‍⁠﻿ "},
         {"name": "a\x00b"},
         {"name": "a\nb"},
+        {"name": "⠀"},
+        {"name": "ab"},
         {},
     ],
 )
@@ -568,6 +548,33 @@ def test_a_private_outsider_cannot_restore(as_user, db_url):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "board_not_found"}
+
+
+def test_restore_that_would_pass_1000_visible_cards_is_refused(as_user, db_url):
+    client, ada, board_id = board_with(as_user, db_url, "owner")
+    live = add_list(db_url, board_id, "Live", 1.0)
+    gone = add_list(db_url, board_id, "Gone", 2.0, archived_by=ada, archived_at=_now())
+    add_cards(db_url, board_id, live, 999)
+    add_card(db_url, board_id, gone, "A", 1.0)
+    add_card(db_url, board_id, gone, "B", 2.0)
+    before = len(events(db_url))
+
+    response = client.post(url(board_id, gone, "restore"))
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "card_limit"}
+    assert list_row(db_url, gone).archived_at is not None
+    assert len(events(db_url)) == before
+
+
+def test_restore_up_to_exactly_1000_visible_cards_is_fine(as_user, db_url):
+    client, ada, board_id = board_with(as_user, db_url, "owner")
+    live = add_list(db_url, board_id, "Live", 1.0)
+    gone = add_list(db_url, board_id, "Gone", 2.0, archived_by=ada, archived_at=_now())
+    add_cards(db_url, board_id, live, 999)
+    add_card(db_url, board_id, gone, "A", 1.0)
+
+    assert client.post(url(board_id, gone, "restore")).status_code == 200
 
 
 # ---- other boards and archived boards -------------------------------------------

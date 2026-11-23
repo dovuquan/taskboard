@@ -1,6 +1,17 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
-import { type BoardDetail, type BoardList, type Me, getBoard, getLists } from "../api";
+import {
+  type BoardDetail,
+  type BoardList,
+  type Card,
+  type Me,
+  getBoard,
+  getCards,
+  getLists,
+} from "../api";
+import { canAddCard, groupByList, shouldApply } from "../cards/logic";
+import { startBoardPoller } from "../cards/poller";
+import { CARD_LIMIT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
 import { Icon } from "../components/Icon";
@@ -20,9 +31,28 @@ type ViewProps = {
   message?: string | null;
   onUndo?: (() => void) | null;
   lists?: BoardList[];
+  cards?: Card[];
   lanes?: Partial<LanesControls>;
   onRetry?: () => void;
 };
+
+/** Everything one load of the board screen brings, or why it failed. */
+type Snapshot =
+  | { kind: "ok"; board: BoardDetail; lists: BoardList[]; cards: Card[] }
+  | { kind: "expired" | "not_found" | "network" | "server" };
+
+async function fetchSnapshot(id: number): Promise<Snapshot> {
+  const [board, lists, cards] = await Promise.all([getBoard(id), getLists(id), getCards(id)]);
+  if (board.kind === "ok" && lists.kind === "ok" && cards.kind === "ok") {
+    return { kind: "ok", board: board.data, lists: lists.data, cards: cards.data };
+  }
+  const kinds: string[] = [board.kind, lists.kind, cards.kind];
+  if (kinds.includes("expired")) return { kind: "expired" };
+  if (kinds.includes("not_found")) return { kind: "not_found" };
+  return { kind: kinds.includes("network") ? "network" : "server" };
+}
+
+const POLL_MS = 30_000;
 
 function LoadFailure({ kind, onRetry }: { kind: "network" | "server"; onRetry?: () => void }) {
   return (
@@ -58,6 +88,7 @@ export function BoardView({
   message,
   onUndo,
   lists = [],
+  cards = [],
   lanes,
   onRetry,
 }: ViewProps) {
@@ -65,6 +96,8 @@ export function BoardView({
   if (state === "ready" && board) {
     const owner = board.my_role === "owner";
     const editor = board.my_role !== "observer";
+    const byList = groupByList(lists, cards);
+    const total = lists.reduce((n, l) => n + byList[l.id].length, 0);
     content = (
       <>
         <div className="gutter">
@@ -89,6 +122,11 @@ export function BoardView({
               )}
             </Link>
           </div>
+          {editor && !canAddCard(total) && (
+            <div className="banner warn" style={{ marginBottom: 12 }}>
+              <Icon name="alert" /> {CARD_LIMIT_TEXT}
+            </div>
+          )}
           {!editor && (
             <div className="banner" style={{ marginBottom: 12 }}>
               <Icon name="eye" /> You can view this board but not change it. Ask a board owner for
@@ -97,7 +135,7 @@ export function BoardView({
           )}
         </div>
         {lists.length > 0 ? (
-          <LanesView lists={lists} editor={editor} controls={lanes} />
+          <LanesView lists={lists} editor={editor} cards={byList} controls={lanes} />
         ) : (
           <div className="page gutter">
             <div className="empty">
@@ -181,27 +219,32 @@ export function Board({
   const [attempt, setAttempt] = useState(0);
   const [message, show, undo] = useToast();
   const [lists, setLists] = useState<BoardList[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+
+  // A reload may replace the screen only if nothing local happened since it began: `epoch` counts
+  // local changes, `pending` the saves in flight, `dragging` a drag under way.
+  const epoch = useRef(0);
+  const pending = useRef(0);
+  const dragging = useRef(false);
+  const ready = useRef(false);
+  ready.current = load.state === "ready";
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     let live = true;
     setLoad({ state: "loading", board: null });
     setLists([]);
+    setCards([]);
     async function fetchAll() {
-      const res = await getBoard(id);
+      const res = await fetchSnapshot(id);
       if (!live) return;
       if (res.kind === "expired") window.location.reload();
       else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
-      else if (res.kind !== "ok") {
-        setLoad({ state: res.kind === "network" ? "network" : "server", board: null });
-      } else {
-        const found = await getLists(id);
-        if (!live) return;
-        if (found.kind === "ok") {
-          setLists(found.data);
-          setLoad({ state: "ready", board: res.data });
-        } else if (found.kind === "expired") window.location.reload();
-        else if (found.kind === "not_found") setLoad({ state: "gone", board: null });
-        else setLoad({ state: found.kind === "network" ? "network" : "server", board: null });
+      else if (res.kind !== "ok") setLoad({ state: res.kind, board: null });
+      else {
+        setLists(res.lists);
+        setCards(res.cards);
+        setLoad({ state: "ready", board: res.board });
       }
     }
     void fetchAll();
@@ -209,6 +252,38 @@ export function Board({
       live = false;
     };
   }, [id, attempt]);
+
+  // Other people's changes arrive by polling: every 30 s while the tab is visible, and when the
+  // tab becomes visible or the window gets focus. One reload at a time.
+  useEffect(() => {
+    const poller = startBoardPoller<Extract<Snapshot, { kind: "ok" }>>({
+      load: async () => {
+        const res = await fetchSnapshot(id);
+        if (res.kind === "expired") window.location.reload();
+        else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
+        else if (res.kind === "ok") return res;
+        return null;
+      },
+      onResult: (res) => {
+        setLists(res.lists);
+        setCards(res.cards);
+        setLoad({ state: "ready", board: res.board });
+      },
+      epoch: () => epoch.current,
+      canApply: (start) => shouldApply(start, epoch.current, pending.current, dragging.current),
+      enabled: () => ready.current,
+      setInterval: (tick, ms) => window.setInterval(tick, ms),
+      clearInterval: (timer) => window.clearInterval(timer),
+      doc: document,
+      win: window,
+      intervalMs: POLL_MS,
+    });
+    refreshRef.current = poller.refresh;
+    return () => {
+      poller.stop();
+      refreshRef.current = async () => {};
+    };
+  }, [id]);
 
   const name = load.board?.name ?? null;
   useEffect(() => {
@@ -224,10 +299,33 @@ export function Board({
     else if (res.kind === "expired") window.location.reload();
   }
 
+  /** Runs a save: while it is out, and after it, an older reload is not allowed to win. */
+  function track<T>(save: Promise<T>): Promise<T> {
+    pending.current += 1;
+    epoch.current += 1;
+    return save.finally(() => {
+      pending.current -= 1;
+      epoch.current += 1;
+    });
+  }
+
   const lanes = useLanes({
     boardId: id,
     lists,
-    setLists,
+    setLists: (update) => {
+      epoch.current += 1;
+      setLists(update);
+    },
+    cards,
+    setCards: (update) => {
+      epoch.current += 1;
+      setCards(update);
+    },
+    track,
+    setDragging: (on) => {
+      dragging.current = on;
+    },
+    refresh: () => refreshRef.current(),
     notify: show,
     onForbidden: () => void reload(),
     onGone: () => setLoad({ state: "gone", board: null }),
@@ -254,6 +352,7 @@ export function Board({
       message={message}
       onUndo={undo}
       lists={lists}
+      cards={cards}
       lanes={lanes}
       onRetry={() => setAttempt((n) => n + 1)}
     />

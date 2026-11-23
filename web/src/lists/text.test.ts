@@ -51,6 +51,9 @@ describe("changeFailureText", () => {
 
   it("explains the limit, a vanished list and a changed board", () => {
     expect(changeFailureText("list_limit", false)).toBe(LIST_LIMIT_TEXT);
+    expect(changeFailureText("card_limit", false)).toBe(
+      "This board has reached 1,000 cards, the limit for one board. Archive cards to add new ones.",
+    );
     expect(changeFailureText("list_not_found", true)).toBe(
       "That list was changed by someone else. The lists were reloaded.",
     );
@@ -74,5 +77,11 @@ describe("restoreFailureText", () => {
   it("falls back to the general text", () => {
     expect(restoreFailureText("network")).toBe("Can't reach Taskboard. Your change was not saved.");
     expect(restoreFailureText("list_limit")).toBe(LIST_LIMIT_TEXT);
+  });
+
+  it("gives the card limit text when the server refuses the restore on card_limit", () => {
+    expect(restoreFailureText("card_limit")).toBe(
+      "This board has reached 1,000 cards, the limit for one board. Archive cards to add new ones.",
+    );
   });
 });

@@ -30,9 +30,14 @@ BoardId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 UserId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 
 
+_BAD_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp", "Co", "Cs", "Cn"})
+_BLANKS = frozenset("ᅟᅠㅤﾠ⠀")
+
+
 def _no_invisible(name: str) -> str:
-    """Reject control (Cc) and format (Cf, such as zero-width) characters anywhere in a name."""
-    if any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name):
+    """Reject control, format, separator, private-use, surrogate, unassigned and blank-looking
+    characters anywhere in a name."""
+    if any(unicodedata.category(ch) in _BAD_CATEGORIES or ch in _BLANKS for ch in name):
         raise ValueError("name must not contain control or invisible characters")
     return name
 
@@ -132,6 +137,19 @@ def require_board_role(min_role: str):
         return BoardCtx(db.get(Board, board_id), user, role)
 
     return dependency
+
+
+def ensure_role(s: Session, user: User, board_id: int, min_role: str) -> str:
+    """Inside the transaction, after the write lock is taken: the actor's role as it is now.
+
+    Raises 404 `board_not_found` for an archived or no-longer-visible board, 403 `forbidden`
+    below `min_role`. The identity map is expired first so nothing read earlier is reused.
+    """
+    s.expire_all()
+    role = board_access(s, user, board_id)
+    if _RANK[role] < _RANK[min_role]:
+        raise HTTPException(403, "forbidden")
+    return role
 
 
 _OWNER = Depends(require_board_role("owner"))

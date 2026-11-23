@@ -164,13 +164,15 @@ describe("BoardView lanes", () => {
     expect(forty.text).not.toContain("is the limit for one board");
   });
 
-  it("opens the menu with Rename list and Archive list, and no Add a card yet", () => {
+  it("opens the menu with Add a card first, then Rename list and Archive list", () => {
     const { html, text } = render({ lists: some, lanes: { menu: 12 } });
     expect(html).toContain('role="menu"');
     expect(html).toContain('aria-expanded="true"');
-    expect(text).toContain("Rename list");
+    const items = [...html.matchAll(/role="menuitem"[^>]*>([\s\S]*?)<\/button>/g)].map((m) =>
+      m[1].replace(/<[^>]*>/g, "").trim(),
+    );
+    expect(items).toEqual(["Add a card", "Rename list", "Archive list"]);
     expect(text).toContain("Archive list");
-    expect(text).not.toContain("Add a card");
   });
 
   it("shows the rename field for the list being renamed", () => {
@@ -184,6 +186,173 @@ describe("BoardView lanes", () => {
     const { html } = render({ lists: some, lanes: { adding: true } });
     expect(html).toContain('aria-label="New list name"');
     expect(html).toContain('placeholder="List name"');
+  });
+});
+
+const card = (id: number, list_id: number, title: string) => ({
+  id,
+  key: `TB-${id}`,
+  list_id,
+  title,
+});
+
+const cards = [
+  card(1, 11, "Pack boxes"),
+  card(2, 12, "Label crates"),
+  card(3, 11, "Book movers"),
+  card(4, 11, "Order tape"),
+];
+
+const lane = (html: string, name: string) => {
+  const start = html.indexOf(`aria-label="${name}"`);
+  const end = html.indexOf("</section>", start);
+  return html.slice(start, end);
+};
+
+describe("BoardView cards", () => {
+  it("shows each tile with its key and title, in order", () => {
+    const { html } = render({ lists: some, cards });
+    const todo = lane(html, "To do");
+    expect(todo).toContain('<span class="cid mono">TB-1</span><span class="title">Pack boxes</span>');
+    expect(todo.indexOf("Pack boxes")).toBeLessThan(todo.indexOf("Book movers"));
+    expect(todo.indexOf("Book movers")).toBeLessThan(todo.indexOf("Order tape"));
+    expect(todo).not.toContain("Label crates");
+    expect(lane(html, "Doing")).toContain("Label crates");
+  });
+
+  it("puts the tiles in a lane body that is a drop target", () => {
+    const { html } = render({ lists: some, cards });
+    expect(html).toContain('class="lane-body" data-drop="11"');
+    expect(html).toContain('data-card="1"');
+  });
+
+  it("leaves out cards of lists that are not shown", () => {
+    const { html } = render({ lists: [some[1]], cards });
+    expect(html).toContain("Label crates");
+    expect(html).not.toContain("Pack boxes");
+  });
+
+  it("does not make a tile a button yet", () => {
+    const { html } = render({ lists: some, cards });
+    expect(html).not.toContain('role="button"');
+    expect(html).not.toContain("tabindex");
+  });
+
+  it("shows the number of cards in each lane header", () => {
+    const { html } = render({ lists: some, cards });
+    expect(html).toContain('<span class="n">3</span>');
+    expect(html).toContain('<span class="n">1</span>');
+    expect(html).toContain('<span class="n">0</span>');
+    expect(lane(html, "To do")).toContain('<span class="n">3</span>');
+    expect(lane(html, "Done")).toContain('<span class="n">0</span>');
+  });
+
+  it("shows the count to observers too", () => {
+    const { html } = render({ board: board({ my_role: "observer" }), lists: some, cards });
+    expect(html).toContain('<span class="n">3</span>');
+  });
+
+  it("makes cards draggable and shows Add a card for owners and members", () => {
+    for (const my_role of ["owner", "member"] as const) {
+      const { html } = render({ board: board({ my_role }), lists: some, cards });
+      const todo = lane(html, "To do");
+      expect(todo).toMatch(/class="card"[^>]*draggable="true"|draggable="true"[^>]*class="card"/);
+      expect((html.match(/class="add-card"/g) ?? []).length).toBe(3);
+      expect(html).toContain("Add a card");
+    }
+  });
+
+  it("gives observers no drag, no add button, no composer and no menu", () => {
+    const { html, text } = render({
+      board: board({ my_role: "observer" }),
+      lists: some,
+      cards,
+      lanes: { composer: 11 },
+    });
+    expect(html).toContain("Pack boxes");
+    expect(html).not.toContain("draggable");
+    expect(html).not.toContain('class="add-card"');
+    expect(html).not.toContain("New card title");
+    expect(html).not.toContain("List actions for");
+    expect(text).not.toContain("Add a card");
+  });
+
+  it("marks the dragged card and the drop slot", () => {
+    const dragged = render({ lists: some, cards, lanes: { cardDragId: 1 } }).html;
+    expect(dragged).toMatch(/class="card dragging"/);
+    const before = render({
+      lists: some,
+      cards,
+      lanes: { cardDragId: 2, cardDrop: { listId: 11, index: 1 } },
+    }).html;
+    expect(before).toMatch(/class="card drop-before"[^>]*data-card="3"|data-card="3"[^>]*class="card drop-before"/);
+    const end = render({
+      lists: some,
+      cards,
+      lanes: { cardDragId: 2, cardDrop: { listId: 11, index: 3 } },
+    }).html;
+    expect(end).toContain('class="lane-body drop-end" data-drop="11"');
+    expect(end).not.toContain("drop-before");
+  });
+
+  it("opens the composer for one lane with the prototype's fields", () => {
+    const { html, text } = render({ lists: some, cards, lanes: { composer: 12 } });
+    const doing = lane(html, "Doing");
+    expect(doing).toContain('class="composer"');
+    expect(doing).toContain('placeholder="Card title"');
+    expect(doing).toContain('maxLength="200"');
+    expect(doing).toContain('aria-label="New card title"');
+    expect(doing).toContain("Add card</button>");
+    expect(doing).toContain("Cancel</button>");
+    expect(text).toContain("Enter to add · Esc to close");
+    expect(lane(html, "To do")).not.toContain("composer");
+    expect(lane(html, "To do")).toContain("Add a card");
+    expect(doing).not.toContain('class="add-card"');
+  });
+
+  it("words the archive item with the card count", () => {
+    const three = render({ lists: some, cards, lanes: { menu: 11 } }).text;
+    expect(three).toContain("Archive list and its 3 cards");
+    const one = render({ lists: some, cards, lanes: { menu: 12 } }).text;
+    expect(one).toContain("Archive list and its 1 card");
+    expect(one).not.toContain("1 cards");
+    const none = render({ lists: some, cards, lanes: { menu: 13 } }).text;
+    expect(none).toContain("Archive list");
+    expect(none).not.toContain("Archive list and its");
+  });
+});
+
+describe("BoardView card limit", () => {
+  const many = Array.from({ length: 1000 }, (_, i) => card(i + 1, 11, `Card ${i + 1}`));
+
+  it("shows the banner to editors and hides every way to add a card", () => {
+    const { html, text } = render({ lists: some, cards: many, lanes: { composer: 11, menu: 11 } });
+    expect(html).toContain('class="banner warn"');
+    expect(text).toContain(
+      "This board has reached 1,000 cards, the limit for one board. Archive cards to add new ones.",
+    );
+    expect(html).not.toContain('class="add-card"');
+    expect(html).not.toContain("New card title");
+    expect(html).not.toContain("Enter to add");
+    expect(text).not.toContain("Add a card");
+    expect(text).toContain("Archive list and its 1000 cards");
+  });
+
+  it("does not show the banner to observers", () => {
+    const { html, text } = render({
+      board: board({ my_role: "observer" }),
+      lists: some,
+      cards: many,
+    });
+    expect(html).not.toContain("banner warn");
+    expect(text).not.toContain("1,000 cards");
+  });
+
+  it("does not show the banner at 999 cards", () => {
+    const { html, text } = render({ lists: some, cards: many.slice(0, 999) });
+    expect(html).not.toContain("banner warn");
+    expect(html).toContain('class="add-card"');
+    expect(text).toContain("Add a card");
   });
 });
 

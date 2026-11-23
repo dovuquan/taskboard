@@ -2,14 +2,28 @@ import { type DragEvent, type FormEvent, type KeyboardEvent, useEffect, useRef, 
 
 import {
   type BoardList,
+  type Card,
+  type CardError,
   type ListError,
   archiveList,
+  createCard,
   createList,
   getLists,
+  moveCard,
   moveList,
   renameList,
   restoreList,
 } from "../api";
+import {
+  type ByList,
+  type MovePlan,
+  applyMoveResult,
+  canAddCard,
+  groupByList,
+  planCardDrop,
+  ungroup,
+} from "../cards/logic";
+import { CARD_LIMIT_TEXT, cardFailureText } from "../cards/text";
 import {
   archiveIn,
   arrange,
@@ -30,11 +44,25 @@ import {
   restoreFailureText,
   restoredText,
 } from "../lists/text";
+import { CardTile, Composer } from "./Cards";
 import { Icon } from "./Icon";
 
 /** What the lanes show and do. Every field is optional so a page can render them statically. */
 export type LanesControls = {
   menu: number | null;
+  /** The lane whose "Card title" box is open. */
+  composer: number | null;
+  cardDragId: number | null;
+  /** The slot the dragged card would land in: before the card at `index` of that list. */
+  cardDrop: { listId: number; index: number } | null;
+  onOpenComposer: (listId: number) => void;
+  onCloseComposer: () => void;
+  onAddCard: (listId: number, title: string) => Promise<boolean>;
+  onCardDragStart: (id: number) => void;
+  onCardDragEnd: () => void;
+  onCardDragOver: (listId: number, index: number) => void;
+  onCardDragLeave: () => void;
+  onCardDrop: (listId: number, index: number) => void;
   renaming: number | null;
   adding: boolean;
   seeding: boolean;
@@ -66,10 +94,37 @@ function targetIndex(e: DragEvent<HTMLElement>, lists: BoardList[]): number {
   return lists.findIndex((l) => String(l.id) === over.dataset.lane);
 }
 
-function LaneMenu({ list, c }: { list: BoardList; c: Partial<LanesControls> }) {
+/** The slot index of the card the pointer is above, or the list length when it is below all. */
+function cardTargetIndex(e: DragEvent<HTMLElement>, cards: Card[]): number {
+  const tiles = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(".card:not(.dragging)"));
+  const over = tiles.find((tile) => {
+    const r = tile.getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2;
+  });
+  if (!over) return cards.length;
+  const index = cards.findIndex((card) => String(card.id) === over.dataset.card);
+  return index < 0 ? cards.length : index;
+}
+
+function LaneMenu({
+  list,
+  count,
+  canAdd,
+  c,
+}: {
+  list: BoardList;
+  count: number;
+  canAdd: boolean;
+  c: Partial<LanesControls>;
+}) {
   return (
     <div className="pop" role="menu" style={{ right: 6, top: 36 }}>
       <span className="head">{list.name}</span>
+      {canAdd && (
+        <button className="item" type="button" role="menuitem" onClick={() => c.onOpenComposer?.(list.id)}>
+          <Icon name="plus" /> Add a card
+        </button>
+      )}
       <button className="item" type="button" role="menuitem" onClick={() => c.onStartRename?.(list.id)}>
         Rename list
       </button>
@@ -80,7 +135,7 @@ function LaneMenu({ list, c }: { list: BoardList; c: Partial<LanesControls> }) {
         role="menuitem"
         onClick={() => c.onArchive?.(list.id)}
       >
-        Archive list
+        {count > 0 ? `Archive list and its ${count} card${count === 1 ? "" : "s"}` : "Archive list"}
       </button>
     </div>
   );
@@ -159,16 +214,23 @@ function AddForm({ c }: { c: Partial<LanesControls> }) {
 export function LanesView({
   lists,
   editor,
+  cards = {},
   controls = {},
 }: {
   lists: BoardList[];
   editor: boolean;
+  /** The cards of each list, from `groupByList`. */
+  cards?: ByList;
   controls?: Partial<LanesControls>;
 }) {
   const c = controls;
   const dragging = c.dragId ?? null;
   const dropIndex = c.dropIndex ?? null;
   const atEnd = dragging !== null && dropIndex === lists.length;
+  const cardDragId = c.cardDragId ?? null;
+  const cardDrop = c.cardDrop ?? null;
+  const total = lists.reduce((n, l) => n + (cards[l.id]?.length ?? 0), 0);
+  const canAdd = editor && canAddCard(total);
 
   return (
     <div className="lanes-wrap gutter">
@@ -190,6 +252,8 @@ export function LanesView({
           const classes = ["lane"];
           if (dragging === list.id) classes.push("dragging");
           if (dragging !== null && dropIndex === index) classes.push("lane-drop-before");
+          const laneCards = cards[list.id] ?? [];
+          const slot = cardDragId !== null && cardDrop?.listId === list.id ? cardDrop.index : null;
           return (
             <section className={classes.join(" ")} data-lane={list.id} aria-label={list.name} key={list.id}>
               <div
@@ -199,6 +263,11 @@ export function LanesView({
                       draggable: true,
                       title: "Drag to move the list",
                       onDragStart: (e: DragEvent<HTMLDivElement>) => {
+                        // A card drag wins: a list does not start moving under it.
+                        if (cardDragId !== null) {
+                          e.preventDefault();
+                          return;
+                        }
                         e.dataTransfer.effectAllowed = "move";
                         try {
                           e.dataTransfer.setData("text/plain", String(list.id));
@@ -227,6 +296,7 @@ export function LanesView({
                     {list.name}
                   </h3>
                 )}
+                <span className="n">{laneCards.length}</span>
                 {editor && (
                   <button
                     className="icon-btn"
@@ -240,9 +310,51 @@ export function LanesView({
                     <Icon name="dots" />
                   </button>
                 )}
-                {editor && c.menu === list.id && <LaneMenu list={list} c={c} />}
+                {editor && c.menu === list.id && (
+                  <LaneMenu list={list} count={laneCards.length} canAdd={canAdd} c={c} />
+                )}
               </div>
-              <div className="lane-body"></div>
+              <div
+                className={slot === laneCards.length ? "lane-body drop-end" : "lane-body"}
+                data-drop={list.id}
+                onDragOver={(e) => {
+                  if (cardDragId === null) return;
+                  e.preventDefault();
+                  c.onCardDragOver?.(list.id, cardTargetIndex(e, laneCards));
+                }}
+                onDragLeave={(e) => {
+                  if (cardDragId === null) return;
+                  if (!e.currentTarget.contains(e.relatedTarget as Node | null)) c.onCardDragLeave?.();
+                }}
+                onDrop={(e) => {
+                  if (cardDragId === null) return;
+                  e.preventDefault();
+                  c.onCardDrop?.(list.id, cardTargetIndex(e, laneCards));
+                }}
+              >
+                {laneCards.map((card, i) => (
+                  <CardTile
+                    card={card}
+                    editor={editor}
+                    dragging={cardDragId === card.id}
+                    dropBefore={slot === i}
+                    onDragStart={c.onCardDragStart}
+                    onDragEnd={c.onCardDragEnd}
+                    key={card.id}
+                  />
+                ))}
+              </div>
+              {canAdd &&
+                (c.composer === list.id ? (
+                  <Composer
+                    onAdd={(title) => c.onAddCard?.(list.id, title) ?? Promise.resolve(false)}
+                    onClose={c.onCloseComposer}
+                  />
+                ) : (
+                  <button className="add-card" type="button" onClick={() => c.onOpenComposer?.(list.id)}>
+                    <Icon name="plus" /> Add a card
+                  </button>
+                ))}
             </section>
           );
         })}
@@ -267,6 +379,14 @@ type Setup = {
   boardId: number;
   lists: BoardList[];
   setLists: (update: (lists: BoardList[]) => BoardList[]) => void;
+  cards: Card[];
+  setCards: (update: (cards: Card[]) => Card[]) => void;
+  /** Wraps a save so a reload that finishes meanwhile does not overwrite its result. */
+  track: <T>(save: Promise<T>) => Promise<T>;
+  /** Tells the page a drag started or ended. */
+  setDragging: (dragging: boolean) => void;
+  /** Loads the board, lists and cards again. */
+  refresh: () => Promise<void>;
   notify: (text: string, undo?: () => void) => void;
   /** The server said 403: the caller's role changed, so the board is fetched again. */
   onForbidden: () => void;
@@ -281,10 +401,21 @@ export function useLanes({
   boardId,
   lists,
   setLists,
+  cards,
+  setCards,
+  track,
+  setDragging,
+  refresh,
   notify,
   onForbidden,
   onGone,
 }: Setup): LanesControls {
+  const [composer, setComposer] = useState<number | null>(null);
+  const [cardDragId, setCardDragId] = useState<number | null>(null);
+  const [cardDrop, setCardDrop] = useState<{ listId: number; index: number } | null>(null);
+  const cardsNow = useRef(cards);
+  cardsNow.current = cards;
+  const cardBusy = useRef(false);
   const [menu, setMenu] = useState<number | null>(null);
   const [renaming, setRenaming] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
@@ -342,7 +473,7 @@ export function useLanes({
     }
     busy.current = true;
     try {
-      const res = await createList(boardId, name);
+      const res = await track(createList(boardId, name));
       if (res.kind !== "ok") {
         fail(res.kind, changeFailureText(res.kind, false));
         return false;
@@ -361,7 +492,7 @@ export function useLanes({
     setSeeding(true);
     try {
       for (const name of SEED) {
-        const res = await createList(boardId, name);
+        const res = await track(createList(boardId, name));
         if (res.kind !== "ok") {
           fail(res.kind, changeFailureText(res.kind, false));
           return;
@@ -386,7 +517,7 @@ export function useLanes({
     const previous = list.name;
     const set = (to: string, from: string) => setLists((ls) => renameIn(ls, id, from, to));
     set(name, previous);
-    void renameList(boardId, id, name).then((res) => {
+    void track(renameList(boardId, id, name)).then((res) => {
       if (res.kind === "ok") {
         set(res.data.name, name);
         notify(renamedText(res.data.name));
@@ -403,7 +534,7 @@ export function useLanes({
     if (!archived) return;
     const { index, list } = archived;
     setLists((ls) => archiveIn(ls, id)?.next ?? ls);
-    void archiveList(boardId, id).then((res) => {
+    void track(archiveList(boardId, id)).then((res) => {
       if (res.kind === "ok") {
         notify(archivedText(list.name), () => void undoArchive(list));
         return;
@@ -414,18 +545,21 @@ export function useLanes({
   }
 
   async function undoArchive(list: BoardList) {
-    const res = await restoreList(boardId, list.id);
+    const res = await track(restoreList(boardId, list.id));
     if (res.kind !== "ok") {
       fail(res.kind, restoreFailureText(res.kind));
       return;
     }
     notify(restoredText(res.data.name));
     await reloadLists();
+    // The restored list brings back its cards; the ones held here may be out of date.
+    void refresh();
   }
 
   function endDrag() {
     setDragId(null);
     setDropIndex(null);
+    setDragging(false);
   }
 
   function drop(index: number) {
@@ -438,7 +572,7 @@ export function useLanes({
     const from = ids.indexOf(id);
     const name = current.current[from].name;
     setLists((ls) => arrange(ls, plan.next));
-    void moveList(boardId, id, plan.after_id).then((res) => {
+    void track(moveList(boardId, id, plan.after_id)).then((res) => {
       if (res.kind === "ok") {
         notify(movedText(name));
         return;
@@ -457,8 +591,85 @@ export function useLanes({
     });
   }
 
+  /** What every failed card call does besides telling the person. */
+  function failCard(kind: CardError, text: string) {
+    if (kind !== "not_found" && kind !== "expired") notify(text);
+    if (kind === "expired") window.location.reload();
+    else if (kind === "forbidden") onForbidden();
+    else if (kind === "not_found") onGone();
+    else if (kind === "conflict" || kind === "card_not_found" || kind === "list_not_found") {
+      void refresh();
+    }
+  }
+
+  async function addCard(listId: number, title: string): Promise<boolean> {
+    if (cardBusy.current) return false;
+    const total = ungroup(groupByList(current.current, cardsNow.current)).length;
+    if (!canAddCard(total)) {
+      notify(CARD_LIMIT_TEXT);
+      return false;
+    }
+    cardBusy.current = true;
+    try {
+      // The key comes from the server, so the tile appears only once it has answered.
+      const res = await track(createCard(boardId, listId, title));
+      if (res.kind !== "ok") {
+        failCard(res.kind, cardFailureText(res.kind, false));
+        return false;
+      }
+      const made = res.data;
+      setCards((cs) => (cs.some((c) => c.id === made.id) ? cs : [...cs, made]));
+      return true;
+    } finally {
+      cardBusy.current = false;
+    }
+  }
+
+  function dropCard(listId: number, index: number) {
+    const id = cardDragId;
+    endCardDrag();
+    if (id === null) return;
+    const plan = planCardDrop(groupByList(current.current, cardsNow.current), id, listId, index);
+    if (!plan) return;
+    const key = cardsNow.current.find((c) => c.id === id)?.key ?? "";
+    const movePlan: MovePlan = { cardId: id, key, move: plan.move };
+    setCards(() => ungroup(plan.next));
+    void track(moveCard(boardId, id, plan.move)).then((res) => {
+      const apply = (cs: Card[]) => applyMoveResult(cs, current.current, movePlan, res);
+      const out = apply(cardsNow.current);
+      setCards((cs) => apply(cs).cards);
+      if (res.kind === "ok" || res.kind === "card_moved") notify(out.toast);
+      else failCard(res.kind, out.toast);
+      if (out.reload) void refresh();
+    });
+  }
+
+  function endCardDrag() {
+    setCardDragId(null);
+    setCardDrop(null);
+    setDragging(false);
+  }
+
   return {
     menu,
+    composer,
+    cardDragId,
+    cardDrop,
+    onOpenComposer: (listId) => {
+      setMenu(null);
+      setComposer(listId);
+    },
+    onCloseComposer: () => setComposer(null),
+    onAddCard: addCard,
+    onCardDragStart: (id) => {
+      setCardDragId(id);
+      setDragging(true);
+    },
+    onCardDragEnd: endCardDrag,
+    onCardDragOver: (listId, index) =>
+      setCardDrop((prev) => (prev?.listId === listId && prev.index === index ? prev : { listId, index })),
+    onCardDragLeave: () => setCardDrop(null),
+    onCardDrop: dropCard,
     renaming,
     adding,
     seeding,
@@ -476,7 +687,10 @@ export function useLanes({
     onCancelAdd: () => setAdding(false),
     onAdd: add,
     onSeed: () => void seed(),
-    onDragStart: setDragId,
+    onDragStart: (id) => {
+      setDragId(id);
+      setDragging(true);
+    },
     onDragEnd: endDrag,
     onDragOver: setDropIndex,
     onDrop: drop,
