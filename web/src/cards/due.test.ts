@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DUE_LABEL, dueState, dueTitle, formatDue } from "./due";
+import { DUE_LABEL, dueState, dueTitle, formatDue, isCommittableDay } from "./due";
 
 const at = (y: number, m: number, d: number, h = 12, min = 0) => new Date(y, m - 1, d, h, min);
 
@@ -101,5 +101,26 @@ describe("due text", () => {
 
   it("labels the two chips", () => {
     expect(DUE_LABEL).toEqual({ over: "Overdue", soon: "Due soon" });
+  });
+});
+
+describe("a date worth saving", () => {
+  it("accepts a real day from 1970 on", () => {
+    expect(isCommittableDay("2026-11-08")).toBe(true);
+    expect(isCommittableDay("1970-01-01")).toBe(true);
+    expect(isCommittableDay("9999-12-31")).toBe(true);
+    expect(isCommittableDay("2024-02-29")).toBe(true);
+  });
+
+  it("refuses a half-typed year: typing 2026 passes through 0002, 0020 and 0202", () => {
+    for (const text of ["0002-03-04", "0020-03-04", "0202-03-04", "1969-12-31", "0000-01-01"]) {
+      expect(isCommittableDay(text), text).toBe(false);
+    }
+  });
+
+  it("refuses text that is not a day", () => {
+    for (const text of ["", "2026-3-4", "2026-13-01", "2026-02-30", "2025-02-29", "x2026-01-01", "2026-01-01 "]) {
+      expect(isCommittableDay(text), text).toBe(false);
+    }
   });
 });

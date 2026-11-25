@@ -54,13 +54,21 @@ export const LINK_FAILED_TEXT = "Couldn't copy the link. Copy it from the addres
 export const DRAFT_OPEN_TEXT = "You have an unsaved description. Save or cancel it first.";
 export const DRAFT_KEPT_TEXT = "Your unsaved description is kept. Open the card to carry on.";
 
+/** An ended session does not reload the page while a description has unsaved text. */
+export const EXPIRED_DRAFT_TEXT =
+  "Your session has ended. Your unsaved description is still in its box; copy it, then reload the page and sign in again.";
+
+/** Shown above a description that someone who can no longer edit still has open. */
+export const DRAFT_READONLY_TEXT =
+  "You can no longer change this card. Your unsaved description is shown read-only: copy it, or discard it.";
+
 /** The toast for a failed description save; the text stays in the box except when the card is gone. */
 export function descriptionFailureText(kind: CardError): string {
   switch (kind) {
     case "network":
       return "Can't reach Taskboard. Your description was not saved; the text is still here.";
     case "expired":
-      return "Your session has ended. Your description was not saved; sign in again.";
+      return "Your session has ended. Your description was not saved; the text is still here. Copy it, then reload the page and sign in again.";
     case "forbidden":
       return "You can no longer change this card. Your description was not saved; the text is still here.";
     case "card_not_found":

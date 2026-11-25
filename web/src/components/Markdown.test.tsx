@@ -49,7 +49,7 @@ describe("Markdown", () => {
     expect(out).toContain(
       'title="https://www.example.com/docs/guide/install-steps/with-a-very-long-tail?x=1"',
     );
-    expect(out).toContain(">docs</a>");
+    expect(out).toContain(">docs (www.example.com)</a>");
   });
 
   it("shows a bare address as host and the start of the path", () => {

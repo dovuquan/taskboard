@@ -4,6 +4,7 @@ import {
   type Ref,
   useEffect,
   useLayoutEffect,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -25,29 +26,39 @@ import {
   removeCardLabel,
   removeCardMember,
 } from "../api";
-import { DUE_LABEL, dueState, formatDue } from "../cards/due";
+import { DUE_LABEL, dueState, formatDue, isCommittableDay } from "../cards/due";
 import {
   type CardField,
   DESCRIPTION_LIMIT,
   acceptDetail,
+  anyDirty,
   assignablePeople,
   canAddCard,
+  closeAction,
   createSaveTracker,
   descriptionToSend,
-  draftDirty,
+  dialogCard,
+  draftForKey,
+  draftMode,
+  draftsReducer,
   escapeAction,
   fieldKey,
   findByKey,
+  keepForcedGone,
+  keptOnLeave,
   matchPeople,
   readField,
+  sameField,
   shouldRefetchDetail,
   showPeopleSearch,
+  titleBoxHeight,
   titleFrom,
   withField,
 } from "../cards/logic";
 import {
   DRAFT_KEPT_TEXT,
   DRAFT_OPEN_TEXT,
+  DRAFT_READONLY_TEXT,
   LINK_COPIED_TEXT,
   LINK_FAILED_TEXT,
   cardFailureText,
@@ -86,8 +97,9 @@ export type DialogControls = {
   onMemberQuery: (query: string) => void;
   onToggleMember: (id: number, on: boolean) => void;
   onToggleLabel: (id: number, on: boolean) => void;
-  onTitle: (title: string) => void;
-  onDue: (day: string | null) => void;
+  /** A title or due date is bound to the card it was typed on, even if it is sent after leaving it. */
+  onTitle: (title: string, cardId: number) => void;
+  onDue: (day: string | null, cardId: number) => void;
   onEdit: () => void;
   onDraft: (text: string) => void;
   onSaveDraft: () => void;
@@ -113,9 +125,17 @@ type ViewProps = {
   frameRef?: Ref<HTMLDivElement>;
 };
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Sizes the title box to its text; the height includes the borders, so nothing clips or scrolls. */
+function fitTitleBox(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${titleBoxHeight(el)}px`;
+}
 
-/** The card title as a textarea that grows with its text. Enter saves, Esc puts the old title back. */
+/**
+ * The card title as a textarea that grows with its text. Enter saves, Esc puts the old title back.
+ * It belongs to one card (the dialog gives it `key={tile.id}`), and a valid typed title is still
+ * saved if the dialog goes away first.
+ */
 function TitleField({
   title,
   popOpen,
@@ -129,17 +149,43 @@ function TitleField({
   const box = useRef<HTMLTextAreaElement>(null);
   const focused = useRef(false);
   const skip = useRef(false);
+  const latest = useRef({ text, title, onCommit });
+  latest.current = { text, title, onCommit };
+  /** The title this field already handed over, until the card shows it. */
+  const sent = useRef<string | null>(null);
 
   useEffect(() => {
+    sent.current = null;
     if (!focused.current) setText(title);
   }, [title]);
 
   useLayoutEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
+    if (box.current) fitTitleBox(box.current);
   }, [text]);
+
+  // A narrower or wider box wraps the title differently.
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let width = el.clientWidth;
+    const watcher = new ResizeObserver(() => {
+      if (el.clientWidth === width) return;
+      width = el.clientWidth;
+      fitTitleBox(el);
+    });
+    watcher.observe(el);
+    return () => watcher.disconnect();
+  }, []);
+
+  // Back, a link or Esc closes the dialog before the field loses focus: do not lose the title.
+  useEffect(
+    () => () => {
+      const { text: now, title: saved, onCommit: save } = latest.current;
+      const next = titleFrom(now);
+      if (next !== null && next !== saved && next !== sent.current) save?.(next);
+    },
+    [],
+  );
 
   function commit() {
     const next = titleFrom(text);
@@ -148,6 +194,7 @@ function TitleField({
       return;
     }
     setText(next);
+    sent.current = next;
     onCommit?.(next);
   }
 
@@ -161,6 +208,7 @@ function TitleField({
       e.stopPropagation();
       skip.current = true;
       setText(title);
+      latest.current = { ...latest.current, text: title };
       e.currentTarget.blur();
       skip.current = false;
     }
@@ -189,30 +237,46 @@ function TitleField({
 }
 
 /**
- * The native date input. A date is saved when the field loses focus or stays unchanged for a
- * moment, never while it is half typed (typing a year passes through 0002, 0020, ...). An
- * incomplete date is dropped; the Clear button is how a date is removed.
+ * The native date input. A date is saved when the field loses focus, stays unchanged for a moment
+ * or the dialog goes away, never while it is half typed (typing a year passes through 0002, 0020,
+ * ...: only a real day from 1970 on counts). An incomplete date is dropped; the Clear button is how
+ * a date is removed. It belongs to one card (the dialog gives it `key={tile.id}`).
  */
 function DueField({ value, onCommit }: { value: string | null; onCommit?: (day: string | null) => void }) {
   const [text, setText] = useState(value ?? "");
-  const latest = useRef({ text, value });
-  latest.current = { text, value };
+  const latest = useRef({ text, value, onCommit });
+  latest.current = { text, value, onCommit };
+  /** The day this field already handed over, until the card shows it. */
+  const sent = useRef<string | null>(null);
 
   useEffect(() => {
+    sent.current = null;
     setText(value ?? "");
   }, [value]);
 
   function commit() {
-    const { text: now, value: saved } = latest.current;
-    if (DATE_RE.test(now) && now !== (saved ?? "")) onCommit?.(now);
-    else if (!DATE_RE.test(now)) setText(saved ?? "");
+    const { text: now, value: saved, onCommit: save } = latest.current;
+    if (!isCommittableDay(now)) setText(saved ?? "");
+    else if (now !== (saved ?? "")) {
+      sent.current = now;
+      save?.(now);
+    }
   }
 
   useEffect(() => {
-    if (!DATE_RE.test(text) || text === (value ?? "")) return;
+    if (!isCommittableDay(text) || text === (value ?? "")) return;
     const timer = setTimeout(commit, 800);
     return () => clearTimeout(timer);
   }, [text]);
+
+  // Back or a link can take the dialog away within the 0.8 s: send a complete date, never a half one.
+  useEffect(
+    () => () => {
+      const { text: now, value: saved, onCommit: save } = latest.current;
+      if (isCommittableDay(now) && now !== (saved ?? "") && now !== sent.current) save?.(now);
+    },
+    [],
+  );
 
   return (
     <>
@@ -379,8 +443,34 @@ function Description({
   c: Partial<DialogControls>;
 }) {
   const hasText = detail.description !== null && detail.description !== "";
+  const counter = (text: string) =>
+    `${text.length.toLocaleString("en-US")} / ${DESCRIPTION_LIMIT.toLocaleString("en-US")}`;
   let body;
-  if (draft !== null) {
+  if (draft !== null && !editor) {
+    // Someone who can no longer edit: the text stays to be copied or discarded, never saved.
+    body = (
+      <div data-desc="">
+        <textarea
+          className="input desc-input"
+          rows={7}
+          aria-label="Description"
+          readOnly
+          value={draft}
+        ></textarea>
+        <div className="desc-actions">
+          <button
+            className="btn sm"
+            type="button"
+            disabled={saving}
+            onClick={() => c.onCancelDraft?.()}
+          >
+            Discard
+          </button>
+          <span className="fine counter">{counter(draft)}</span>
+        </div>
+      </div>
+    );
+  } else if (draft !== null) {
     body = (
       <div data-desc="">
         <textarea
@@ -416,9 +506,7 @@ function Description({
           >
             Cancel
           </button>
-          <span className="fine counter">
-            {`${draft.length.toLocaleString("en-US")} / ${DESCRIPTION_LIMIT.toLocaleString("en-US")}`}
-          </span>
+          <span className="fine counter">{counter(draft)}</span>
           <span className="fine">
             {"HTML tags are removed. Markdown: **bold**, *italic*, `code`, - lists"}
           </span>
@@ -528,7 +616,8 @@ export function CardDialogView({
 
   // Observers only ever see the card menu (Copy link); the editing popups are for editors.
   const pop = editor || ui.pop === "menu" ? (ui.pop ?? null) : null;
-  const draft = editor ? (ui.draft ?? null) : null;
+  // Someone who cannot edit still sees a draft they had open (read-only), so it is never hidden.
+  const draft = ui.draft ?? null;
   const listName = lists.find((l) => l.id === tile.list_id)?.name ?? "another list";
   const onCard = tile.label_ids
     .map((id) => labels.find((l) => l.id === id))
@@ -577,8 +666,18 @@ export function CardDialogView({
               it or close the card.
             </div>
           )}
+          {draft !== null && !editor && (
+            <div className="banner warn">
+              <Icon name="alert" /> {DRAFT_READONLY_TEXT}
+            </div>
+          )}
           {editor ? (
-            <TitleField title={tile.title} popOpen={pop !== null} onCommit={c.onTitle} />
+            <TitleField
+              key={tile.id}
+              title={tile.title}
+              popOpen={pop !== null}
+              onCommit={(title) => c.onTitle?.(title, tile.id)}
+            />
           ) : (
             <h2 id="card-title" className="title-text">
               {tile.title}
@@ -642,7 +741,11 @@ export function CardDialogView({
               <span className="lab">Due date</span>
               <div className="row">
                 {editor ? (
-                  <DueField value={tile.due_on} onCommit={c.onDue} />
+                  <DueField
+                    key={tile.id}
+                    value={tile.due_on}
+                    onCommit={(day) => c.onDue?.(day, tile.id)}
+                  />
                 ) : tile.due_on ? (
                   <span>{formatDue(tile.due_on)}</span>
                 ) : (
@@ -672,11 +775,14 @@ type Setup = {
   refresh: () => Promise<void>;
   onForbidden: () => void;
   onGone: () => void;
+  /** The session ended (401): the screen reloads, unless `hasDirty` says text would be lost. */
+  onExpired: () => void;
+  /** The person's role on the board; an observer cannot edit, and a draft stays read-only. */
+  role: BoardRole | null;
   /** Counts the polls that were applied; each one refetches the open card's detail. */
   polled: number;
 };
 
-type Draft = { key: string; id: number; text: string; original: string | null };
 type Loaded = { id: number | null; state: DetailView["state"]; description: string | null };
 
 export type CardEditor = {
@@ -687,8 +793,13 @@ export type CardEditor = {
   detail: DetailView;
   /** The description being edited, or null. */
   draft: string | null;
+  /** The draft is shown to be copied or discarded only, as the person can no longer edit. */
+  draftReadOnly: boolean;
+  /** Any card has a description draft with unsaved text. */
+  hasDirty: boolean;
   saving: boolean;
-  setField: (field: CardField) => void;
+  /** Changes one field of the card `cardId` (not necessarily the one on screen any more). */
+  setField: (cardId: number, field: CardField) => void;
   startEdit: () => void;
   changeDraft: (text: string) => void;
   cancelDraft: () => void;
@@ -728,28 +839,43 @@ export function useCardEditor({
   refresh,
   onForbidden,
   onGone,
+  onExpired,
+  role,
   polled,
 }: Setup): CardEditor {
   const found = cardKey ? findByKey(cards, cardKey) : null;
   const lastTile = useRef<Card | null>(null);
   if (found) lastTile.current = found;
-  const [draft, setDraft] = useState<Draft | null>(null);
+  // One draft per card, so what is typed on one card is never lost by working on another.
+  const [drafts, dispatch] = useReducer(draftsReducer, {});
   const [saving, setSaving] = useState(false);
   const [forcedGone, setForcedGone] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Loaded>({ id: null, state: "loading", description: null });
   const [attempt, setAttempt] = useState(0);
+  const canEdit = role !== "observer";
 
   // A draft keeps the dialog on its card even when a poll shows the card gone.
-  const keepsDraft = draft !== null && cardKey === draft.key && lastTile.current?.key === cardKey;
-  const stale = !found && keepsDraft;
-  const shown = forcedGone !== null && forcedGone === cardKey ? null : (found ?? (keepsDraft ? lastTile.current : null));
+  const { tile: shown, stale } = dialogCard({
+    cardKey,
+    found,
+    last: lastTile.current,
+    draft: cardKey ? draftForKey(drafts, cardKey) : undefined,
+    forcedGone,
+  });
   const openId = shown?.id ?? null;
-  const editing = draft !== null && shown !== null && draft.id === shown.id ? draft : null;
+  const editing = shown ? drafts[shown.id] : undefined;
+  const mode = draftMode(canEdit, editing);
 
   const shownNow = useRef(shown);
   shownNow.current = shown;
   const draftNow = useRef(editing);
   draftNow.current = editing;
+  const draftsNow = useRef(drafts);
+  draftsNow.current = drafts;
+  const cardsNow = useRef(cards);
+  cardsNow.current = cards;
+  const canEditNow = useRef(canEdit);
+  canEditNow.current = canEdit;
   const savingNow = useRef(false);
   const detailNow = useRef(loaded);
   detailNow.current = loaded;
@@ -757,7 +883,7 @@ export function useCardEditor({
   const tracker = useRef(createSaveTracker());
 
   function react(kind: CardError) {
-    if (kind === "expired") window.location.reload();
+    if (kind === "expired") onExpired();
     else if (kind === "forbidden") onForbidden();
     else if (kind === "not_found") onGone();
     else if (
@@ -801,21 +927,21 @@ export function useCardEditor({
     const current = shownNow.current;
     if (
       !current ||
-      !shouldRefetchDetail({ open: true, draft: draftNow.current !== null, saving: savingNow.current })
+      !shouldRefetchDetail({ open: true, draft: draftNow.current !== undefined, saving: savingNow.current })
     ) {
       return;
     }
     const startVersion = version.current;
     void getCard(boardId, current.id).then((res) => {
       if (res.kind === "expired") {
-        window.location.reload();
+        onExpired();
         return;
       }
       if (res.kind !== "ok") return;
       const accepted = acceptDetail({
         openId: shownNow.current?.id ?? null,
         fetchedId: current.id,
-        draft: draftNow.current !== null,
+        draft: draftNow.current !== undefined,
         startVersion,
         version: version.current,
       });
@@ -823,42 +949,53 @@ export function useCardEditor({
     });
   }, [polled]);
 
-  // Leaving the card with an unsaved draft (Back, a link): keep the draft and say so.
+  // The "card is gone" mark ends when the address moves on, or a later snapshot has the card again.
   useEffect(() => {
-    if (draft === null || draft.key === cardKey) return;
-    if (draftDirty(draft.original, draft.text)) notify(DRAFT_KEPT_TEXT);
-    else setDraft(null);
+    setForcedGone((mark) => keepForcedGone(mark, cardKey, found !== null));
+  }, [cardKey, polled]);
+
+  // Leaving a card by address (Back, a link): its draft stays in memory, and a toast says so.
+  const lastKey = useRef(cardKey);
+  useEffect(() => {
+    const left = lastKey.current;
+    lastKey.current = cardKey;
+    if (left === null || left === cardKey) return;
+    if (keptOnLeave(draftsNow.current, left)) notify(DRAFT_KEPT_TEXT);
+    dispatch({ type: "leave", key: left });
   }, [cardKey]);
 
-  function setField(field: CardField) {
-    const card = shownNow.current;
+  /** Changes a field of card `id` on screen at once, then saves it, one save at a time per field. */
+  function setField(id: number, field: CardField) {
+    const card = cardsNow.current.find((c) => c.id === id);
     if (!card) return;
-    const key = fieldKey(field);
     const before = readField(card, field);
-    if (JSON.stringify(before) === JSON.stringify(field)) return;
-    const ticket = tracker.current.start(key, before);
-    const id = card.id;
+    if (sameField(before, field)) return;
+    setCards((cs) => cs.map((c) => (c.id === id ? withField(c, field) : c)));
+    const key = fieldKey(id, field);
+    const send = tracker.current.request(key, before, field);
+    if (send !== null) sendNext(id, key, send);
+  }
+
+  function sendNext(id: number, key: string, field: CardField) {
     const put = (value: CardField) =>
       setCards((cs) => cs.map((c) => (c.id === id ? withField(c, value) : c)));
-    put(field);
     void track(sendField(boardId, id, field)).then((res) => {
-      if (res.kind === "ok") {
-        const settled = tracker.current.settle(key, ticket, {
-          ok: true,
-          value: readField(res.data, field),
-        });
-        if (settled.kind === "apply") put(settled.value);
-        return;
-      }
-      const settled = tracker.current.settle(key, ticket, { ok: false });
-      if (settled.kind === "revert") put(settled.value);
-      fail(res.kind, cardFailureText(res.kind, true));
+      const step = tracker.current.settle(
+        key,
+        res.kind === "ok" ? { ok: true, value: readField(res.data, field) } : { ok: false },
+      );
+      if (step.screen.kind !== "keep") put(step.screen.value);
+      if (step.next !== null) sendNext(id, key, step.next);
+      if (res.kind === "ok") return;
+      // Only a failure that took the field back says "undone"; any other settles quietly.
+      if (step.screen.kind === "revert") fail(res.kind, cardFailureText(res.kind, true));
+      else react(res.kind);
     });
   }
 
   function saveDraft() {
     const d = draftNow.current;
-    if (!d || savingNow.current) return;
+    if (!d || savingNow.current || !canEditNow.current) return;
     savingNow.current = true;
     setSaving(true);
     void track(patchCard(boardId, d.id, { description: descriptionToSend(d.text) })).then((res) => {
@@ -867,7 +1004,7 @@ export function useCardEditor({
       if (res.kind === "ok") {
         version.current += 1;
         setLoaded({ id: d.id, state: "ready", description: res.data.description });
-        setDraft((cur) => (cur && cur.id === d.id ? null : cur));
+        dispatch({ type: "drop", id: d.id });
         setCards((cs) =>
           cs.map((c) => (c.id === d.id ? { ...c, has_description: res.data.has_description } : c)),
         );
@@ -876,7 +1013,7 @@ export function useCardEditor({
       if (res.kind === "card_not_found") {
         // The card is gone, so the dialog goes with it; the toast says the text was not saved.
         notify(descriptionFailureText(res.kind));
-        setDraft(null);
+        dispatch({ type: "drop", id: d.id });
         setForcedGone(d.key);
         void refresh();
         return;
@@ -887,13 +1024,12 @@ export function useCardEditor({
   }
 
   function requestClose() {
-    const d = draftNow.current;
-    if (d && draftDirty(d.original, d.text)) {
+    if (closeAction(canEditNow.current, draftNow.current) === "blocked") {
       // Not silently: the dialog stays open until the person saves or cancels.
       notify(DRAFT_OPEN_TEXT);
       return;
     }
-    setDraft(null);
+    dispatch({ type: "close", id: shownNow.current?.id ?? null });
     navigate(`/boards/${boardId}`);
   }
 
@@ -918,16 +1054,28 @@ export function useCardEditor({
     stale,
     detail,
     draft: editing?.text ?? null,
+    draftReadOnly: mode === "readonly",
+    hasDirty: anyDirty(drafts),
     saving,
     setField,
     startEdit: () => {
       const card = shownNow.current;
-      if (!card || detailNow.current.state !== "ready" || detailNow.current.id !== card.id) return;
+      if (!card || !canEditNow.current) return;
+      if (detailNow.current.state !== "ready" || detailNow.current.id !== card.id) return;
       const original = detailNow.current.description;
-      setDraft({ key: card.key, id: card.id, text: original ?? "", original });
+      dispatch({
+        type: "start",
+        entry: { key: card.key, id: card.id, text: original ?? "", original },
+      });
     },
-    changeDraft: (text) => setDraft((d) => (d ? { ...d, text } : d)),
-    cancelDraft: () => setDraft(null),
+    changeDraft: (text) => {
+      const d = draftNow.current;
+      if (d && canEditNow.current) dispatch({ type: "change", id: d.id, text });
+    },
+    cancelDraft: () => {
+      const d = draftNow.current;
+      if (d) dispatch({ type: "cancel", id: d.id, saving: savingNow.current });
+    },
     saveDraft,
     retryDetail: () => setAttempt((n) => n + 1),
     requestClose,
@@ -969,8 +1117,28 @@ export function CardDialog({
   const tileId = useRef<number | null>(null);
   if (tile) tileId.current = tile.id;
 
-  const live = useRef({ pop, draft: ed.draft !== null, cancel: ed.cancelDraft, close: ed.requestClose });
-  live.current = { pop, draft: ed.draft !== null, cancel: ed.cancelDraft, close: ed.requestClose };
+  // Esc cancels only a draft that can be edited; a read-only one is left with Discard.
+  const editingDraft = ed.draft !== null && !ed.draftReadOnly;
+  const live = useRef({ pop, draft: editingDraft, cancel: ed.cancelDraft, close: ed.requestClose });
+  live.current = { pop, draft: editingDraft, cancel: ed.cancelDraft, close: ed.requestClose };
+
+  // A members or labels popup hangs below its button, inside a body that scrolls. Make the body at
+  // least tall enough to hold it (as far as the dialog may grow), so it is not cut off.
+  useLayoutEffect(() => {
+    const modal = frame.current;
+    const body = modal?.querySelector<HTMLElement>(".modal-body");
+    const menu = body?.querySelector<HTMLElement>(".pop");
+    if (!modal || !body || !menu || (pop !== "members" && pop !== "labels")) return;
+    const room = parseFloat(getComputedStyle(modal).maxHeight);
+    const top = modal.querySelector<HTMLElement>(".modal-top")?.offsetHeight ?? 0;
+    const needed =
+      menu.getBoundingClientRect().bottom - body.getBoundingClientRect().top + body.scrollTop + 12;
+    body.style.minHeight = `${Math.min(needed, Number.isNaN(room) ? needed : room - top)}px`;
+    menu.scrollIntoView?.({ block: "nearest" });
+    return () => {
+      body.style.minHeight = "";
+    };
+  }, [pop]);
 
   // The board behind is inert while the dialog is open; focus goes into the dialog and, on close,
   // back to the card's tile.
@@ -992,7 +1160,8 @@ export function CardDialog({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      // Esc that picks or cancels an input-method candidate is not meant for the dialog.
+      if (e.key !== "Escape" || e.isComposing) return;
       const s = live.current;
       const target = e.target instanceof Element ? e.target : null;
       const action = escapeAction({
@@ -1035,10 +1204,14 @@ export function CardDialog({
       setMemberQuery("");
     },
     onMemberQuery: setMemberQuery,
-    onToggleMember: (id, on) => ed.setField({ kind: "member", id, on }),
-    onToggleLabel: (id, on) => ed.setField({ kind: "label", id, on }),
-    onTitle: (value) => ed.setField({ kind: "title", value }),
-    onDue: (value) => ed.setField({ kind: "due", value }),
+    onToggleMember: (id, on) => {
+      if (tile) ed.setField(tile.id, { kind: "member", id, on });
+    },
+    onToggleLabel: (id, on) => {
+      if (tile) ed.setField(tile.id, { kind: "label", id, on });
+    },
+    onTitle: (value, cardId) => ed.setField(cardId, { kind: "title", value }),
+    onDue: (value, cardId) => ed.setField(cardId, { kind: "due", value }),
     onEdit: ed.startEdit,
     onDraft: ed.changeDraft,
     onSaveDraft: ed.saveDraft,

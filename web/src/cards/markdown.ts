@@ -48,6 +48,27 @@ export function shortUrl(url: string): string {
   return u.host.replace(/^www\./, "") + (tail.length > 22 ? `${tail.slice(0, 22)}…` : tail);
 }
 
+/**
+ * The text to show for a `[label](href)` link, or null to show the address itself. The label is
+ * read the way the eye reads it: compatibility forms (fullwidth dots and slashes) become the plain
+ * characters, format characters (zero width, bidi controls) are removed and the ends trimmed. A label
+ * that is empty then, or that looks like an address, is no label. Any other label is followed by the
+ * real host of `href` in brackets, unless it already is that host or the short address shown for it.
+ */
+export function linkLabel(raw: string, href: string): string | null {
+  const label = raw.normalize("NFKC").replace(/\p{Cf}/gu, "").trim();
+  if (label === "" || LOOKS_LIKE_URL.test(label)) return null;
+  let host: string;
+  try {
+    host = new URL(href).host;
+  } catch {
+    return null;
+  }
+  const same = label.toLowerCase();
+  if (same === host.toLowerCase() || same === shortUrl(href).toLowerCase()) return label;
+  return `${label} (${host})`;
+}
+
 /** Finds the next `marker` at or after `from`, remembering the answer for monotone callers. */
 function finder(src: string): (marker: string, from: number) => number {
   const last = new Map<string, number>();
@@ -133,11 +154,7 @@ function parseInline(src: string, bold: boolean, italic: boolean): Inline[] {
       if (link) {
         const label = src.slice(i + 1, close);
         flush();
-        out.push({
-          t: "link",
-          href: link.href,
-          label: label.trim() === "" || LOOKS_LIKE_URL.test(label) ? null : label,
-        });
+        out.push({ t: "link", href: link.href, label: linkLabel(label, link.href) });
         i = link.end + 1;
         continue;
       }

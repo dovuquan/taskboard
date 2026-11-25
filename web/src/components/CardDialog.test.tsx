@@ -189,10 +189,32 @@ describe("CardDialogView for an observer", () => {
     expect(text).not.toContain("Copy card");
   });
 
-  it("ignores a popup or an edit state it should never have", () => {
-    const { html } = observer({ ui: { pop: "members", draft: "x" } });
+  it("ignores a popup it should never have", () => {
+    const { html } = observer({ ui: { pop: "members" } });
     expect(html).not.toContain("Board members");
     expect(html).not.toContain("<textarea");
+  });
+
+  it("shows a draft left from before as read-only text with Discard, and no Save", () => {
+    const { html, text } = observer({ ui: { draft: "my unsaved words" } });
+    expect(html).toMatch(/<textarea[^>]*readOnly=""[^>]*aria-label="Description"|<textarea[^>]*aria-label="Description"[^>]*readOnly=""/);
+    expect(html).toContain(">my unsaved words</textarea>");
+    expect(html).not.toContain("maxLength");
+    expect(html).toMatch(/>Discard<\/button>/);
+    expect(html).not.toMatch(/>Save<\/button>/);
+    expect(html).not.toMatch(/>Cancel<\/button>/);
+    expect(text).toContain("You can no longer change this card. Your unsaved description is shown read-only");
+    expect(text).not.toContain("HTML tags are removed");
+  });
+
+  it("keeps Discard off while the save of that text is still out", () => {
+    const { html } = observer({ ui: { draft: "x", saving: true } });
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Discard<\/button>/);
+  });
+
+  it("shows no read-only note for an editor's draft", () => {
+    const { text } = render({ ui: { draft: "x" } }, "member");
+    expect(text).not.toContain("shown read-only");
   });
 });
 

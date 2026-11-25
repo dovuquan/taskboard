@@ -204,9 +204,15 @@ export type CardField =
   | { kind: "label"; id: number; on: boolean }
   | { kind: "member"; id: number; on: boolean };
 
-/** Saves of the same field share a key; saves of different fields do not interfere. */
-export function fieldKey(field: CardField): string {
-  return field.kind === "label" || field.kind === "member" ? `${field.kind}:${field.id}` : field.kind;
+/** Saves of the same field of the same card share a key; nothing else does. */
+export function fieldKey(cardId: number, field: CardField): string {
+  const name = field.kind === "label" || field.kind === "member" ? `${field.kind}:${field.id}` : field.kind;
+  return `${cardId}:${name}`;
+}
+
+/** True when both describe the same field with the same value. */
+export function sameField(a: CardField, b: CardField): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function toggled(ids: number[], id: number, on: boolean): number[] {
@@ -250,41 +256,48 @@ export type Settled =
 
 export type SaveOutcome = { ok: true; value: CardField } | { ok: false };
 
+/** What to do after a save answered: change the screen, and maybe send the value that waited. */
+export type SaveStep = { screen: Settled; next: CardField | null };
+
 /**
- * Keeps overlapping saves of one field in order. Each field shows its newest local value; only the
- * newest save's answer may touch it (the server's value on success, the last confirmed value on
- * failure). An older answer arriving first or last changes nothing on screen.
+ * Keeps the saves of one field of one card in order: at most one is out at a time. A change made
+ * while one is out waits, and only the newest waiting value is sent once the answer is in (nothing
+ * is sent if it is what the server already has). The screen shows the newest value all along. A
+ * failure takes the field back to the last value the server confirmed and drops what waited.
  */
 export function createSaveTracker() {
-  type Slot = { latest: number; inflight: number; confirmed: CardField; confirmedTicket: number };
+  type Slot = { confirmed: CardField; waiting: CardField | null };
   const slots = new Map<string, Slot>();
-  let counter = 0;
   return {
-    /** Call before sending; `before` is the field's value on screen just before the change. */
-    start(key: string, before: CardField): number {
-      const ticket = ++counter;
+    /**
+     * A change to `value`, made when the screen showed `before`. Returns the value to send now, or
+     * null when a save is already out and this one waits for it.
+     */
+    request(key: string, before: CardField, value: CardField): CardField | null {
       const slot = slots.get(key);
-      if (!slot || slot.inflight === 0) {
-        slots.set(key, { latest: ticket, inflight: 1, confirmed: before, confirmedTicket: 0 });
-      } else {
-        slot.latest = ticket;
-        slot.inflight += 1;
+      if (!slot) {
+        slots.set(key, { confirmed: before, waiting: null });
+        return value;
       }
-      return ticket;
+      slot.waiting = value;
+      return null;
     },
-    settle(key: string, ticket: number, outcome: SaveOutcome): Settled {
+    /** The answer of the save that is out for `key`. */
+    settle(key: string, outcome: SaveOutcome): SaveStep {
       const slot = slots.get(key);
-      if (!slot) return { kind: "keep" };
-      slot.inflight -= 1;
-      const newest = ticket === slot.latest;
-      if (outcome.ok) {
-        if (ticket > slot.confirmedTicket) {
-          slot.confirmed = outcome.value;
-          slot.confirmedTicket = ticket;
-        }
-        return newest ? { kind: "apply", value: outcome.value } : { kind: "keep" };
+      if (!slot) return { screen: { kind: "keep" }, next: null };
+      if (!outcome.ok) {
+        slots.delete(key);
+        return { screen: { kind: "revert", value: slot.confirmed }, next: null };
       }
-      return newest ? { kind: "revert", value: slot.confirmed } : { kind: "keep" };
+      slot.confirmed = outcome.value;
+      const waiting = slot.waiting;
+      slot.waiting = null;
+      if (waiting !== null && !sameField(waiting, outcome.value)) {
+        return { screen: { kind: "keep" }, next: waiting };
+      }
+      slots.delete(key);
+      return { screen: { kind: "apply", value: outcome.value }, next: null };
     },
   };
 }
@@ -325,6 +338,135 @@ export function draftDirty(original: string | null, draft: string): boolean {
 /** Blank text clears the description (null); anything else is sent as typed. */
 export function descriptionToSend(draft: string): string | null {
   return draft.trim() === "" ? null : draft;
+}
+
+/** A description being edited: the card it belongs to, the text, and what the server had. */
+export type DraftEntry = { key: string; id: number; text: string; original: string | null };
+
+/** The drafts of every card that has one, by card id. */
+export type Drafts = Record<number, DraftEntry>;
+
+export type DraftAction =
+  | { type: "start"; entry: DraftEntry }
+  | { type: "change"; id: number; text: string }
+  /** Cancel and Esc: an explicit discard, which must not happen while the save is out. */
+  | { type: "cancel"; id: number; saving: boolean }
+  /** The server took the text, or the card is gone: the draft has no more use. */
+  | { type: "drop"; id: number }
+  /** The dialog closes; `id` is null for the "isn't on the board" dialog. */
+  | { type: "close"; id: number | null }
+  /** The address left the card with this key. */
+  | { type: "leave"; key: string };
+
+function dirtyEntry(entry: DraftEntry | undefined): boolean {
+  return entry !== undefined && draftDirty(entry.original, entry.text);
+}
+
+function removed(drafts: Drafts, id: number): Drafts {
+  const next = { ...drafts };
+  delete next[id];
+  return next;
+}
+
+/**
+ * How the drafts change. A draft is never deleted by anything but an explicit discard, the server
+ * taking it, the card being gone, or a closing that loses nothing (no unsaved text). One card's
+ * draft never touches another's.
+ */
+export function draftsReducer(drafts: Drafts, action: DraftAction): Drafts {
+  switch (action.type) {
+    case "start":
+      return drafts[action.entry.id] ? drafts : { ...drafts, [action.entry.id]: action.entry };
+    case "change": {
+      const entry = drafts[action.id];
+      return entry ? { ...drafts, [action.id]: { ...entry, text: action.text } } : drafts;
+    }
+    case "cancel":
+      return action.saving || !drafts[action.id] ? drafts : removed(drafts, action.id);
+    case "drop":
+      return drafts[action.id] ? removed(drafts, action.id) : drafts;
+    case "close":
+      return action.id !== null && drafts[action.id] && !dirtyEntry(drafts[action.id])
+        ? removed(drafts, action.id)
+        : drafts;
+    case "leave": {
+      const entry = draftForKey(drafts, action.key);
+      return entry && !dirtyEntry(entry) ? removed(drafts, entry.id) : drafts;
+    }
+  }
+}
+
+/** The draft of the card with this key, if there is one. */
+export function draftForKey(drafts: Drafts, key: string): DraftEntry | undefined {
+  return Object.values(drafts).find((d) => d.key === key);
+}
+
+/** True when any card has a draft that differs from what the server holds. */
+export function anyDirty(drafts: Drafts): boolean {
+  return Object.values(drafts).some((d) => dirtyEntry(d));
+}
+
+/** True when leaving the card with this key leaves unsaved text behind (worth a toast). */
+export function keptOnLeave(drafts: Drafts, key: string): boolean {
+  return dirtyEntry(draftForKey(drafts, key));
+}
+
+/** A draft is edited by someone who can edit, and only shown (to copy, or discard) otherwise. */
+export function draftMode(canEdit: boolean, entry: DraftEntry | undefined): "none" | "edit" | "readonly" {
+  if (!entry) return "none";
+  return canEdit ? "edit" : "readonly";
+}
+
+/** Unsaved text blocks closing, unless the person can no longer save it anyway. */
+export function closeAction(canEdit: boolean, entry: DraftEntry | undefined): "close" | "blocked" {
+  return canEdit && dirtyEntry(entry) ? "blocked" : "close";
+}
+
+/** A session that ended may reload the page, unless that would destroy unsaved text. */
+export function expiredAction(unsavedText: boolean): "reload" | "keep" {
+  return unsavedText ? "keep" : "reload";
+}
+
+/**
+ * The card the dialog shows. A card that is on the board is shown; one that left the board stays
+ * (marked stale) while its draft is open; one the server said is gone is not shown at all.
+ */
+export function dialogCard(state: {
+  cardKey: string | null;
+  found: Card | null;
+  last: Card | null;
+  draft: DraftEntry | undefined;
+  forcedGone: string | null;
+}): { tile: Card | null; stale: boolean } {
+  const { cardKey, found, last, draft, forcedGone } = state;
+  if (cardKey === null || forcedGone === cardKey) return { tile: null, stale: false };
+  if (found) return { tile: found, stale: false };
+  const keeps = draft !== undefined && last !== null && last.key === cardKey;
+  return keeps ? { tile: last, stale: true } : { tile: null, stale: false };
+}
+
+/**
+ * The "the server says it is gone" mark of a card key. It ends when the address moves to another
+ * card, or a later snapshot of the board contains the card again.
+ */
+export function keepForcedGone(
+  forced: string | null,
+  cardKey: string | null,
+  snapshotHasCard: boolean,
+): string | null {
+  return forced !== null && forced === cardKey && !snapshotHasCard ? forced : null;
+}
+
+/**
+ * The height to give the title box so its text neither clips nor scrolls: the scroll height leaves
+ * out the borders, and a border-box height includes them.
+ */
+export function titleBoxHeight(box: {
+  scrollHeight: number;
+  offsetHeight: number;
+  clientHeight: number;
+}): number {
+  return box.scrollHeight + (box.offsetHeight - box.clientHeight);
 }
 
 /** What Esc does in the card dialog: a popup first, then the description edit, a field, the dialog. */

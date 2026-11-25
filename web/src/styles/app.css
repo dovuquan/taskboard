@@ -223,7 +223,7 @@ p.lane-form { margin: 0; }
 .desc-actions .counter { margin-left: auto; font-variant-numeric: tabular-nums; }
 .desc-error { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .pop .find { margin: 2px 2px 4px; }
-.pop .scroll { max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.pop .scroll { max-height: min(260px, 40vh); overflow: auto; display: flex; flex-direction: column; gap: 2px; }
 .pop .pad { padding: 4px 8px; }
 .pop .item input[type="checkbox"] { accent-color: var(--accent); }
 @media (max-width: 760px) {

@@ -13,9 +13,9 @@ import {
   getLabels,
   getLists,
 } from "../api";
-import { canAddCard, groupByList, shouldApply, ungroup } from "../cards/logic";
+import { canAddCard, expiredAction, groupByList, shouldApply, ungroup } from "../cards/logic";
 import { startBoardPoller } from "../cards/poller";
-import { CARD_LIMIT_TEXT } from "../cards/text";
+import { CARD_LIMIT_TEXT, EXPIRED_DRAFT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
 import { CardDialog, useCardEditor } from "../components/CardDialog";
@@ -282,6 +282,14 @@ export function Board({
   const ready = useRef(false);
   ready.current = load.state === "ready";
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  // Any description draft with unsaved text: a reload would destroy it.
+  const unsavedText = useRef(false);
+
+  /** The session ended: reload the page to sign in again, unless that would lose typed text. */
+  function expire() {
+    if (expiredAction(unsavedText.current) === "reload") window.location.reload();
+    else show(EXPIRED_DRAFT_TEXT);
+  }
 
   useEffect(() => {
     let live = true;
@@ -293,7 +301,7 @@ export function Board({
     async function fetchAll() {
       const res = await fetchSnapshot(id);
       if (!live) return;
-      if (res.kind === "expired") window.location.reload();
+      if (res.kind === "expired") expire();
       else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
       else if (res.kind !== "ok") setLoad({ state: res.kind, board: null });
       else {
@@ -316,7 +324,7 @@ export function Board({
     const poller = startBoardPoller<Extract<Snapshot, { kind: "ok" }>>({
       load: async () => {
         const res = await fetchSnapshot(id);
-        if (res.kind === "expired") window.location.reload();
+        if (res.kind === "expired") expire();
         else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
         else if (res.kind === "ok") return res;
         return null;
@@ -354,12 +362,21 @@ export function Board({
 
   /** Fetches the board again without the skeleton, after a change in the settings sheet. */
   async function reload() {
-    const [res, members] = await Promise.all([getBoard(id), getBoardMembers(id)]);
-    // Who can be put on a card follows the board's people, which the settings sheet changes.
+    const start = epoch.current;
+    const [res, members, fresh] = await Promise.all([getBoard(id), getBoardMembers(id), getCards(id)]);
+    // Who can be put on a card follows the board's people, which the settings sheet changes, and
+    // taking someone off the board takes them off its cards too.
     if (members.kind === "ok") setPeople(members.data);
+    const apply = shouldApply(start, epoch.current, pending.current, dragging.current);
+    // A poll that began before this must not bring the old board, people or cards back.
+    epoch.current += 1;
+    if (fresh.kind === "ok") {
+      if (apply) setCards(fresh.data);
+      else void refreshRef.current();
+    }
     if (res.kind === "ok") setLoad({ state: "ready", board: res.data });
     else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
-    else if (res.kind === "expired") window.location.reload();
+    else if (res.kind === "expired") expire();
   }
 
   /** Runs a save: while it is out, and after it, an older reload is not allowed to win. */
@@ -407,8 +424,11 @@ export function Board({
     refresh: () => refreshRef.current(),
     onForbidden: () => void reload(),
     onGone: () => setLoad({ state: "gone", board: null }),
+    onExpired: expire,
+    role: load.board?.my_role ?? null,
     polled,
   });
+  unsavedText.current = cardEditor.hasDirty;
 
   const dialog =
     cardKey !== null && load.state === "ready" && load.board ? (

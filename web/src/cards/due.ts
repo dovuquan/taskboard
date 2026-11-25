@@ -17,6 +17,15 @@ function localDay(day: string): Date | null {
 }
 
 /**
+ * True when `text` is a real YYYY-MM-DD day from 1970 on. A native date input reports 0002, 0020
+ * and 0202 on the way to typing 2026, so an earlier year is never a day worth saving.
+ */
+export function isCommittableDay(text: string): boolean {
+  const date = localDay(text);
+  return date !== null && date.getFullYear() >= 1970;
+}
+
+/**
  * How a due day stands against today, both as calendar days in the viewer's own time zone: before
  * today is "over", today up to two days ahead is "soon", later (or no date) is none. A day is 23 or
  * 25 hours long where the clocks change, so the difference is rounded to whole days, not cut.

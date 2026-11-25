@@ -101,7 +101,7 @@ describe("links", () => {
   it("reads [text](url) with http and https", () => {
     expect(inline("see [the docs](https://example.com/a/b)!")).toEqual([
       t("see "),
-      { t: "link", href: "https://example.com/a/b", label: "the docs" },
+      { t: "link", href: "https://example.com/a/b", label: "the docs (example.com)" },
       t("!"),
     ]);
     expect(links(inline("[x](http://example.com/)"))).toEqual(["http://example.com/"]);
@@ -177,6 +177,95 @@ describe("links", () => {
     expect(node).toEqual({ t: "link", href: "https://evil.example/login", label: null });
     const [www] = inline("[www.bank.example](https://evil.example/)");
     expect(www).toMatchObject({ t: "link", label: null });
+  });
+
+  describe("a label never hides the real host", () => {
+    /** The label of the one link in `src`; the test fails if there is not exactly one link. */
+    function labelOf(src: string): string | null {
+      const nodes = inline(src);
+      const found = nodes.filter((n) => n.t === "link");
+      expect(found, src).toHaveLength(1);
+      const [link] = found;
+      if (link.t !== "link") throw new Error("expected a link");
+      return link.label;
+    }
+
+    it("adds the host from the address after any custom label", () => {
+      expect(labelOf("[accounts.google.com](https://evil.example)")).toBe(
+        "accounts.google.com (evil.example)",
+      );
+      expect(labelOf("[Sign in here](https://evil.example/login?x=1)")).toBe("Sign in here (evil.example)");
+    });
+
+    it("sees through a leading or trailing space", () => {
+      expect(labelOf("[ accounts.google.com](https://evil.example)")).toBe("accounts.google.com (evil.example)");
+      expect(labelOf("[accounts.google.com  ](https://evil.example)")).toBe("accounts.google.com (evil.example)");
+    });
+
+    it("strips zero-width characters from the label", () => {
+      expect(labelOf("[accounts​.google⁠.com](https://evil.example)")).toBe(
+        "accounts.google.com (evil.example)",
+      );
+      expect(labelOf("[﻿accounts.google.com](https://evil.example)")).toBe("accounts.google.com (evil.example)");
+    });
+
+    it("reads fullwidth characters as the plain ones they imitate", () => {
+      // Fullwidth dots: shown plainly, with the real host after it.
+      expect(labelOf("[accounts．google．com](https://evil.example)")).toBe(
+        "accounts.google.com (evil.example)",
+      );
+      expect(labelOf("[accounts.google.com／login](https://evil.example)")).toBe(
+        "accounts.google.com/login (evil.example)",
+      );
+      // Fullwidth "https://" is an address-looking label, so the real address is shown instead.
+      expect(labelOf("[https：／／accounts.google.com](https://evil.example)")).toBeNull();
+    });
+
+    it("removes bidi controls so the label cannot be shown reversed", () => {
+      const label = labelOf("[‮moc.elgoog.stnuocca‬](https://evil.example)");
+      expect(label).toBe("moc.elgoog.stnuocca (evil.example)");
+      expect(label).not.toMatch(/\p{Cf}/u);
+      for (const mark of ["‪", "‫", "‭", "⁦", "⁧", "⁨", "⁩", "‎", "‏"]) {
+        expect(labelOf(`[a${mark}b](https://evil.example)`), mark).toBe("ab (evil.example)");
+      }
+    });
+
+    it("treats a label that is empty once the invisible parts are gone as no label", () => {
+      for (const src of [
+        "[​](https://evil.example)",
+        "[​⁠﻿](https://evil.example)",
+        "[‮](https://evil.example)",
+        "[ 　 ](https://evil.example)",
+        "[](https://evil.example)",
+      ]) {
+        expect(labelOf(src), src).toBeNull();
+      }
+    });
+
+    it("keeps www in the host it adds", () => {
+      expect(labelOf("[the docs](https://www.example.com/a)")).toBe("the docs (www.example.com)");
+    });
+
+    it("keeps a port in the host it adds", () => {
+      expect(labelOf("[the docs](https://example.com:8443/a)")).toBe("the docs (example.com:8443)");
+    });
+
+    it("skips the host when the label already is the host, in any case", () => {
+      expect(labelOf("[example.com](https://example.com/a)")).toBe("example.com");
+      expect(labelOf("[Example.COM](https://example.com/a)")).toBe("Example.COM");
+      expect(labelOf("[ example.com​ ](https://example.com/a)")).toBe("example.com");
+    });
+
+    it("skips the host when the label is the short address shown for it", () => {
+      expect(labelOf("[example.com/a](https://www.example.com/a)")).toBe("example.com/a");
+    });
+
+    it("still adds the host when the label only resembles the host", () => {
+      expect(labelOf("[example.com](https://example.com.evil.example/a)")).toBe(
+        "example.com (example.com.evil.example)",
+      );
+      expect(labelOf("[www.example.com/a](https://example.com/b)")).toBeNull();
+    });
   });
 
   it("finds links inside bold text and list items", () => {
@@ -255,6 +344,9 @@ describe("hostile input stays fast", () => {
     ["many lines", "- a\n".repeat(SIZE / 4)],
     ["tags", "<script>".repeat(SIZE / 8)],
     ["mixed", "[**`https://".repeat(SIZE / 12)],
+    ["a label of invisible characters", "[" + "​".repeat(SIZE - 30) + "](https://example.com/)"],
+    ["a label of bidi controls", "[a‮".repeat(SIZE / 40) + "](https://example.com/)"],
+    ["many links with invisible labels", "[​](https://example.com/)".repeat(SIZE / 28)],
   ];
 
   it.each(cases)("parses %s", (_name, src) => {

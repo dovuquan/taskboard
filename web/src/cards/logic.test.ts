@@ -5,27 +5,39 @@ import {
   CARD_LIMIT,
   type ByList,
   DESCRIPTION_LIMIT,
+  type DraftEntry,
   acceptDetail,
+  anyDirty,
   assignablePeople,
   canAddCard,
+  closeAction,
   createSaveTracker,
   descriptionToSend,
+  dialogCard,
   draftDirty,
+  draftForKey,
+  draftMode,
+  draftsReducer,
   escapeAction,
+  expiredAction,
   fieldKey,
   findByKey,
   groupByList,
   insertAfterCard,
+  keepForcedGone,
+  keptOnLeave,
   matchPeople,
   oneLine,
   placeCard,
   planCardDrop,
   readField,
   revertCardMove,
+  sameField,
   shouldApply,
   shouldRefetchDetail,
   showPeopleSearch,
   tileOf,
+  titleBoxHeight,
   titleFrom,
   ungroup,
   withField,
@@ -328,11 +340,18 @@ describe("insertAfterCard", () => {
 });
 
 describe("card fields", () => {
-  it("names each field with its own key", () => {
-    expect(fieldKey({ kind: "title", value: "x" })).toBe("title");
-    expect(fieldKey({ kind: "due", value: null })).toBe("due");
-    expect(fieldKey({ kind: "label", id: 3, on: true })).toBe("label:3");
-    expect(fieldKey({ kind: "member", id: 5, on: false })).toBe("member:5");
+  it("names each field of each card with its own key", () => {
+    expect(fieldKey(7, { kind: "title", value: "x" })).toBe("7:title");
+    expect(fieldKey(7, { kind: "due", value: null })).toBe("7:due");
+    expect(fieldKey(7, { kind: "label", id: 3, on: true })).toBe("7:label:3");
+    expect(fieldKey(7, { kind: "member", id: 5, on: false })).toBe("7:member:5");
+    expect(fieldKey(8, { kind: "title", value: "x" })).not.toBe(fieldKey(7, { kind: "title", value: "x" }));
+  });
+
+  it("tells equal values apart from different ones", () => {
+    expect(sameField({ kind: "title", value: "a" }, { kind: "title", value: "a" })).toBe(true);
+    expect(sameField({ kind: "title", value: "a" }, { kind: "title", value: "b" })).toBe(false);
+    expect(sameField({ kind: "label", id: 1, on: true }, { kind: "label", id: 1, on: false })).toBe(false);
   });
 
   it("sets the title and the due date", () => {
@@ -371,80 +390,305 @@ describe("card fields", () => {
 describe("save tracker", () => {
   const title = (value: string) => ({ kind: "title", value }) as const;
 
-  it("applies the server's value after a lone success", () => {
+  const label = (on: boolean) => ({ kind: "label", id: 1, on }) as const;
+  const KEY = "5:title";
+
+  it("sends the first save at once and applies the server's value after it", () => {
     const t = createSaveTracker();
-    const n = t.start("title", title("A"));
-    expect(t.settle("title", n, { ok: true, value: title("B") })).toEqual({
-      kind: "apply",
-      value: title("B"),
+    expect(t.request(KEY, title("A"), title("B"))).toEqual(title("B"));
+    expect(t.settle(KEY, { ok: true, value: title("B!") })).toEqual({
+      screen: { kind: "apply", value: title("B!") },
+      next: null,
     });
   });
 
   it("goes back to the value before after a lone failure", () => {
     const t = createSaveTracker();
-    const n = t.start("title", title("A"));
-    expect(t.settle("title", n, { ok: false })).toEqual({ kind: "revert", value: title("A") });
-  });
-
-  it("ignores an older answer that arrives after a newer one", () => {
-    const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    const second = t.start("title", title("B"));
-    expect(t.settle("title", second, { ok: true, value: title("C") }).kind).toBe("apply");
-    expect(t.settle("title", first, { ok: true, value: title("B") })).toEqual({ kind: "keep" });
-  });
-
-  it("ignores an older answer that arrives first", () => {
-    const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    const second = t.start("title", title("B"));
-    expect(t.settle("title", first, { ok: true, value: title("B") })).toEqual({ kind: "keep" });
-    expect(t.settle("title", second, { ok: true, value: title("C") })).toEqual({
-      kind: "apply",
-      value: title("C"),
+    t.request(KEY, title("A"), title("B"));
+    expect(t.settle(KEY, { ok: false })).toEqual({
+      screen: { kind: "revert", value: title("A") },
+      next: null,
     });
   });
 
-  it("does not undo a newer change when an older save fails", () => {
+  it("holds a second save until the first has answered, then sends it", () => {
     const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    const second = t.start("title", title("B"));
-    expect(t.settle("title", first, { ok: false })).toEqual({ kind: "keep" });
-    expect(t.settle("title", second, { ok: true, value: title("C") }).kind).toBe("apply");
+    t.request(KEY, title("A"), title("B"));
+    expect(t.request(KEY, title("B"), title("C"))).toBeNull();
+    const first = t.settle(KEY, { ok: true, value: title("B") });
+    expect(first).toEqual({ screen: { kind: "keep" }, next: title("C") });
+    expect(t.settle(KEY, { ok: true, value: title("C") })).toEqual({
+      screen: { kind: "apply", value: title("C") },
+      next: null,
+    });
   });
 
-  it("falls back to what the server last confirmed when the newest save fails", () => {
+  it("sends only the newest of several waiting saves", () => {
     const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    const second = t.start("title", title("B"));
-    t.settle("title", first, { ok: true, value: title("B") });
-    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("B") });
+    t.request(KEY, title("A"), title("B"));
+    t.request(KEY, title("B"), title("C"));
+    t.request(KEY, title("C"), title("D"));
+    expect(t.settle(KEY, { ok: true, value: title("B") }).next).toEqual(title("D"));
   });
 
-  it("falls back to the original when every save fails", () => {
+  it("falls back to what the server confirmed when the follow-up save fails", () => {
     const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    const second = t.start("title", title("B"));
-    t.settle("title", first, { ok: false });
-    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("A") });
+    t.request(KEY, title("A"), title("B"));
+    t.request(KEY, title("B"), title("C"));
+    t.settle(KEY, { ok: true, value: title("B") });
+    expect(t.settle(KEY, { ok: false })).toEqual({
+      screen: { kind: "revert", value: title("B") },
+      next: null,
+    });
+  });
+
+  it("takes everything back and sends nothing more when the first save fails", () => {
+    const t = createSaveTracker();
+    t.request(KEY, title("A"), title("B"));
+    t.request(KEY, title("B"), title("C"));
+    expect(t.settle(KEY, { ok: false })).toEqual({
+      screen: { kind: "revert", value: title("A") },
+      next: null,
+    });
+    // The chain is over: the next change starts a new one from what is on screen.
+    expect(t.request(KEY, title("A"), title("E"))).toEqual(title("E"));
+  });
+
+  it("sends nothing when quick toggles end where the server already is", () => {
+    const t = createSaveTracker();
+    const key = "5:label:1";
+    expect(t.request(key, label(false), label(true))).toEqual(label(true));
+    expect(t.request(key, label(true), label(false))).toBeNull();
+    expect(t.request(key, label(false), label(true))).toBeNull();
+    expect(t.settle(key, { ok: true, value: label(true) })).toEqual({
+      screen: { kind: "apply", value: label(true) },
+      next: null,
+    });
+  });
+
+  it("sends the last toggle when it differs from what the server confirmed", () => {
+    const t = createSaveTracker();
+    const key = "5:label:1";
+    t.request(key, label(false), label(true));
+    t.request(key, label(true), label(false));
+    expect(t.settle(key, { ok: true, value: label(true) })).toEqual({
+      screen: { kind: "keep" },
+      next: label(false),
+    });
+    expect(t.settle(key, { ok: true, value: label(false) }).screen).toEqual({
+      kind: "apply",
+      value: label(false),
+    });
   });
 
   it("starts a fresh chain once nothing is in flight", () => {
     const t = createSaveTracker();
-    const first = t.start("title", title("A"));
-    t.settle("title", first, { ok: true, value: title("B") });
-    const second = t.start("title", title("B"));
-    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("B") });
+    t.request(KEY, title("A"), title("B"));
+    t.settle(KEY, { ok: true, value: title("B") });
+    expect(t.request(KEY, title("B"), title("C"))).toEqual(title("C"));
+    expect(t.settle(KEY, { ok: false }).screen).toEqual({ kind: "revert", value: title("B") });
   });
 
   it("keeps fields apart", () => {
     const t = createSaveTracker();
-    const a = t.start("label:1", { kind: "label", id: 1, on: false });
-    const b = t.start("label:2", { kind: "label", id: 2, on: false });
-    expect(t.settle("label:1", a, { ok: false }).kind).toBe("revert");
-    expect(t.settle("label:2", b, { ok: true, value: { kind: "label", id: 2, on: true } }).kind).toBe(
-      "apply",
+    t.request("5:label:1", label(false), label(true));
+    t.request("5:label:2", { kind: "label", id: 2, on: false }, { kind: "label", id: 2, on: true });
+    expect(t.settle("5:label:1", { ok: false }).screen.kind).toBe("revert");
+    expect(
+      t.settle("5:label:2", { ok: true, value: { kind: "label", id: 2, on: true } }).screen.kind,
+    ).toBe("apply");
+  });
+
+  it("keeps two cards apart: a slow rename of A does not hold up or overwrite B", () => {
+    const t = createSaveTracker();
+    const a = fieldKey(1, title("A1"));
+    const b = fieldKey(2, title("B1"));
+    expect(t.request(a, title("A0"), title("A1"))).toEqual(title("A1"));
+    // A is still out when B is renamed: B goes straight out, it does not queue behind A.
+    expect(t.request(b, title("B0"), title("B1"))).toEqual(title("B1"));
+    expect(t.settle(b, { ok: true, value: title("B1") })).toEqual({
+      screen: { kind: "apply", value: title("B1") },
+      next: null,
+    });
+    expect(t.settle(a, { ok: true, value: title("A1") })).toEqual({
+      screen: { kind: "apply", value: title("A1") },
+      next: null,
+    });
+  });
+
+  it("says keep, and sends nothing, for an answer nobody is waiting for", () => {
+    const t = createSaveTracker();
+    expect(t.settle("9:title", { ok: false })).toEqual({ screen: { kind: "keep" }, next: null });
+  });
+});
+
+describe("description drafts", () => {
+  const entry = (id: number, text = "", original: string | null = null): DraftEntry => ({
+    key: `TB-${id}`,
+    id,
+    text,
+    original,
+  });
+
+  it("keeps a draft per card: starting B does not touch A, and A comes back when reopened", () => {
+    let d = draftsReducer({}, { type: "start", entry: entry(1, "words of A") });
+    d = draftsReducer(d, { type: "change", id: 1, text: "words of A, more" });
+    d = draftsReducer(d, { type: "start", entry: entry(2, "") });
+    expect(d[1].text).toBe("words of A, more");
+    expect(d[2]).toBeDefined();
+    expect(draftForKey(d, "TB-1")?.text).toBe("words of A, more");
+    expect(draftForKey(d, "TB-3")).toBeUndefined();
+  });
+
+  it("does not overwrite a draft that already exists for the card", () => {
+    const d = draftsReducer({ 1: entry(1, "mine") }, { type: "start", entry: entry(1, "", null) });
+    expect(d[1].text).toBe("mine");
+  });
+
+  it("changes only the text of the named card, and ignores a card without a draft", () => {
+    const start = { 1: entry(1, "a"), 2: entry(2, "b") };
+    const d = draftsReducer(start, { type: "change", id: 2, text: "bb" });
+    expect(d[1].text).toBe("a");
+    expect(d[2].text).toBe("bb");
+    expect(draftsReducer(start, { type: "change", id: 9, text: "x" })).toBe(start);
+  });
+
+  it("cancel discards the draft, except while its save is out", () => {
+    const start = { 1: entry(1, "a"), 2: entry(2, "b") };
+    expect(draftsReducer(start, { type: "cancel", id: 1, saving: false })).toEqual({ 2: entry(2, "b") });
+    expect(draftsReducer(start, { type: "cancel", id: 1, saving: true })).toBe(start);
+  });
+
+  it("drop removes the draft of a saved card or one that is gone", () => {
+    expect(draftsReducer({ 1: entry(1, "a"), 2: entry(2, "b") }, { type: "drop", id: 2 })).toEqual({
+      1: entry(1, "a"),
+    });
+  });
+
+  it("closing a card drops only a clean draft of that card", () => {
+    const start = { 1: entry(1, "a", "a"), 2: entry(2, "typed", null), 3: entry(3, "x", "x") };
+    expect(draftsReducer(start, { type: "close", id: 1 })).toEqual({ 2: start[2], 3: start[3] });
+    expect(draftsReducer(start, { type: "close", id: 2 })).toBe(start);
+  });
+
+  it("closing the 'isn't on the board' dialog deletes nobody's draft", () => {
+    const start = { 1: entry(1, "typed", null), 2: entry(2, "also typed", null) };
+    expect(draftsReducer(start, { type: "close", id: null })).toBe(start);
+  });
+
+  it("leaving a card by address drops a clean draft and keeps a dirty one", () => {
+    const start = { 1: entry(1, "a", "a"), 2: entry(2, "typed", null) };
+    expect(draftsReducer(start, { type: "leave", key: "TB-1" })).toEqual({ 2: start[2] });
+    expect(draftsReducer(start, { type: "leave", key: "TB-2" })).toBe(start);
+    expect(draftsReducer(start, { type: "leave", key: "TB-9" })).toBe(start);
+  });
+
+  it("says whether leaving a card keeps text worth telling about", () => {
+    const start = { 1: entry(1, "a", "a"), 2: entry(2, "typed", null) };
+    expect(keptOnLeave(start, "TB-2")).toBe(true);
+    expect(keptOnLeave(start, "TB-1")).toBe(false);
+    expect(keptOnLeave(start, "TB-9")).toBe(false);
+  });
+
+  it("knows when any draft has unsaved text", () => {
+    expect(anyDirty({})).toBe(false);
+    expect(anyDirty({ 1: entry(1, "a", "a") })).toBe(false);
+    expect(anyDirty({ 1: entry(1, "a", "a"), 2: entry(2, "typed", null) })).toBe(true);
+  });
+
+  it("shows a draft read-only, with no way to save it, once the person cannot edit", () => {
+    expect(draftMode(true, entry(1, "x"))).toBe("edit");
+    expect(draftMode(false, entry(1, "x"))).toBe("readonly");
+    expect(draftMode(true, undefined)).toBe("none");
+    expect(draftMode(false, undefined)).toBe("none");
+  });
+
+  it("lets a person who cannot edit close the dialog even with unsaved text", () => {
+    const dirty = entry(1, "typed", null);
+    expect(closeAction(true, dirty)).toBe("blocked");
+    expect(closeAction(false, dirty)).toBe("close");
+    expect(closeAction(true, entry(1, "a", "a"))).toBe("close");
+    expect(closeAction(true, undefined)).toBe("close");
+  });
+
+  it("does not reload on an ended session while any draft has unsaved text", () => {
+    expect(expiredAction(anyDirty({}))).toBe("reload");
+    expect(expiredAction(anyDirty({ 1: entry(1, "a", "a") }))).toBe("reload");
+    expect(expiredAction(anyDirty({ 2: entry(2, "typed", null) }))).toBe("keep");
+  });
+});
+
+describe("which card the dialog shows", () => {
+  const draft: DraftEntry = { key: "TB-3", id: 3, text: "typed", original: null };
+  const three = full(3);
+  const other = full(4);
+
+  it("shows the card that is on the board", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: three, last: three, draft: undefined, forcedGone: null })).toEqual({
+      tile: three,
+      stale: false,
+    });
+  });
+
+  it("shows nothing for a card that is not there and has no draft", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: null, last: three, draft: undefined, forcedGone: null })).toEqual({
+      tile: null,
+      stale: false,
+    });
+  });
+
+  it("keeps the dialog, marked stale, when a draft outlives its card", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: null, last: three, draft, forcedGone: null })).toEqual({
+      tile: three,
+      stale: true,
+    });
+  });
+
+  it("does not use the last card of another key to keep a draft", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: null, last: other, draft, forcedGone: null })).toEqual({
+      tile: null,
+      stale: false,
+    });
+  });
+
+  it("shows 'isn't on the board' once the server said the card is gone", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: three, last: three, draft, forcedGone: "TB-3" })).toEqual({
+      tile: null,
+      stale: false,
+    });
+  });
+
+  it("ignores a 'gone' mark that belongs to another key", () => {
+    expect(dialogCard({ cardKey: "TB-3", found: three, last: three, draft: undefined, forcedGone: "TB-9" }).tile).toBe(
+      three,
     );
+  });
+});
+
+describe("forced gone mark", () => {
+  it("stays while the same card is open and the snapshot still lacks it", () => {
+    expect(keepForcedGone("TB-3", "TB-3", false)).toBe("TB-3");
+  });
+
+  it("clears when the address moves to another card or to none", () => {
+    expect(keepForcedGone("TB-3", "TB-4", false)).toBeNull();
+    expect(keepForcedGone("TB-3", null, false)).toBeNull();
+  });
+
+  it("clears when a later snapshot contains the card again", () => {
+    expect(keepForcedGone("TB-3", "TB-3", true)).toBeNull();
+  });
+
+  it("stays clear when nothing was marked", () => {
+    expect(keepForcedGone(null, "TB-3", true)).toBeNull();
+  });
+});
+
+describe("title box height", () => {
+  it("adds the borders the scroll height leaves out", () => {
+    // 188 of content and padding plus a 1px border on each side: the box must be 190 tall.
+    expect(titleBoxHeight({ scrollHeight: 188, offsetHeight: 186 + 2, clientHeight: 186 })).toBe(190);
+    expect(titleBoxHeight({ scrollHeight: 40, offsetHeight: 40, clientHeight: 40 })).toBe(40);
   });
 });
 
