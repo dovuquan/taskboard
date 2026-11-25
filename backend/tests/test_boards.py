@@ -6,8 +6,12 @@ import pytest
 from sqlalchemy import select, update
 from support import (
     add_board,
+    add_card,
+    add_card_member,
+    add_list,
     add_user,
     board_row,
+    card_member_ids,
     events,
     interfere,
     query,
@@ -15,7 +19,7 @@ from support import (
     user_by_email,
 )
 
-from taskboard.models import Board, BoardMember, WorkspaceMember
+from taskboard.models import Board, BoardMember, WorkspaceMember, _now
 
 TILE_KEYS = {"id", "name", "visibility", "my_role", "member_count", "members", "updated_at"}
 PERSON_KEYS = {"id", "name", "email", "avatar_url"}
@@ -726,6 +730,114 @@ def test_remove_member_deletes_the_row_and_writes_one_event(as_user, db_url):
     [event] = events(db_url)[before:]
     assert (event.kind, event.board_id) == ("board_member.removed", board_id)
     assert event.data == {"user_id": bob, "role": "observer"}
+
+
+# ---- card assignments follow the board role ---------------------------------------
+
+
+def assigned_board(db_url, bob_role="member"):
+    """Ada owns a board; bob is assigned to two cards (one archived) there and one elsewhere."""
+    ada = user_by_email(db_url, "ada@example.com").id
+    bob = add_user(db_url, "bob@example.com")
+    cy = add_user(db_url, "cy@example.com")
+    board_id = add_board(db_url, ada, "B", "workspace", {ada: "owner", bob: bob_role, cy: "member"})
+    lst = add_list(db_url, board_id, "L", 1.0)
+    c1 = add_card(db_url, board_id, lst, "one", 1.0)
+    c2 = add_card(db_url, board_id, lst, "two", 2.0, archived_at=_now())
+    c3 = add_card(db_url, board_id, lst, "three", 3.0)
+    other = add_board(db_url, ada, "O", "workspace", {ada: "owner", bob: "member"})
+    elsewhere = add_card(db_url, other, add_list(db_url, other, "L", 1.0), "x", 1.0)
+    for card_id in (c1, c2, elsewhere):
+        add_card_member(db_url, card_id, bob)
+    add_card_member(db_url, c1, cy)
+    add_card_member(db_url, c3, cy)
+    return board_id, bob, cy, (c1, c2, c3), elsewhere
+
+
+@pytest.mark.parametrize("how", ["remove", "observer"])
+def test_losing_the_member_role_drops_that_persons_assignments_on_this_board_only(
+    as_user, db_url, how
+):
+    ada = as_user("ada@example.com", "sub-ada")
+    board_id, bob, cy, (c1, c2, c3), elsewhere = assigned_board(db_url)
+    before = len(events(db_url))
+
+    if how == "remove":
+        response = ada.delete(f"/api/boards/{board_id}/members/{bob}")
+        kind, base = "board_member.removed", {"user_id": bob, "role": "member"}
+    else:
+        response = ada.patch(f"/api/boards/{board_id}/members/{bob}", json={"role": "observer"})
+        kind, base = (
+            "board_member.role_changed",
+            {"user_id": bob, "from": "member", "to": "observer"},
+        )
+
+    assert response.status_code in (200, 204)
+    assert card_member_ids(db_url, c1) == [cy]
+    assert card_member_ids(db_url, c2) == []  # archived cards too
+    assert card_member_ids(db_url, c3) == [cy]
+    assert card_member_ids(db_url, elsewhere) == [bob]
+    [event] = events(db_url)[before:]
+    assert (event.kind, event.board_id) == (kind, board_id)
+    assert event.data == {**base, "unassigned_card_ids": sorted([c1, c2])}
+
+
+@pytest.mark.parametrize("how", ["remove", "observer"])
+def test_no_unassigned_key_when_the_person_had_no_assignments(as_user, db_url, how):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    bob = add_user(db_url, "bob@example.com")
+    board_id = add_board(db_url, ada_id, "B", "workspace", {ada_id: "owner", bob: "member"})
+    before = len(events(db_url))
+
+    if how == "remove":
+        ada.delete(f"/api/boards/{board_id}/members/{bob}")
+    else:
+        ada.patch(f"/api/boards/{board_id}/members/{bob}", json={"role": "observer"})
+
+    [event] = events(db_url)[before:]
+    assert "unassigned_card_ids" not in event.data
+
+
+@pytest.mark.parametrize(("start", "to"), [("member", "owner"), ("owner", "member")])
+def test_owner_and_member_changes_keep_assignments(as_user, db_url, start, to):
+    ada = as_user("ada@example.com", "sub-ada")
+    board_id, bob, cy, (c1, c2, c3), _elsewhere = assigned_board(db_url, start)
+    before = len(events(db_url))
+
+    response = ada.patch(f"/api/boards/{board_id}/members/{bob}", json={"role": to})
+
+    assert response.status_code == 200
+    assert card_member_ids(db_url, c1) == sorted([bob, cy])
+    assert card_member_ids(db_url, c2) == [bob]
+    [event] = events(db_url)[before:]
+    assert event.data == {"user_id": bob, "from": start, "to": to}
+
+
+def test_becoming_a_member_again_restores_nothing(as_user, db_url):
+    ada = as_user("ada@example.com", "sub-ada")
+    board_id, bob, cy, (c1, c2, _c3), _elsewhere = assigned_board(db_url)
+    ada.patch(f"/api/boards/{board_id}/members/{bob}", json={"role": "observer"})
+
+    response = ada.patch(f"/api/boards/{board_id}/members/{bob}", json={"role": "member"})
+
+    assert response.status_code == 200
+    assert card_member_ids(db_url, c1) == [cy] and card_member_ids(db_url, c2) == []
+
+
+def test_a_failed_removal_keeps_the_assignments(as_user, db_url):
+    ada = as_user("ada@example.com", "sub-ada")
+    ada_id = user_by_email(db_url, "ada@example.com").id
+    board_id = add_board(db_url, ada_id, "B", "workspace", {ada_id: "owner"})
+    card_id = add_card(db_url, board_id, add_list(db_url, board_id, "L", 1.0), "one", 1.0)
+    add_card_member(db_url, card_id, ada_id)
+    before = len(events(db_url))
+
+    response = ada.delete(f"/api/boards/{board_id}/members/{ada_id}")  # the last owner
+
+    assert response.status_code == 409
+    assert card_member_ids(db_url, card_id) == [ada_id]
+    assert len(events(db_url)) == before
 
 
 # ---- last owner -----------------------------------------------------------------

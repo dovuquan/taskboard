@@ -9,14 +9,22 @@ write lock with its first statement; a write that finds the world changed writes
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
 from taskboard.auth import get_db
-from taskboard.boards import BoardCtx, _no_invisible, ensure_role, require_board_role
+from taskboard.boards import BoardCtx, ensure_role, require_board_role
+from taskboard.card_fields import (
+    _TITLE_MAX,
+    CardId,
+    CardTitle,
+    copy_links,
+    tile_of,
+    visible_tiles,
+)
 from taskboard.events import record_change
 from taskboard.models import Board, BoardList, Card, Event, User, _now
 from taskboard.ordering import Exhausted, between, rebalance
@@ -26,15 +34,8 @@ router = APIRouter()
 MAX_CARDS = 1000
 _MAX_ID = 2**63 - 1
 _COPY_SUFFIX = " (copy)"
-_TITLE_MAX = 200
 
-CardId = Annotated[int, Path(ge=1, le=_MAX_ID)]
 _Id = Annotated[StrictInt, Field(ge=1, le=_MAX_ID)]
-CardTitle = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=_TITLE_MAX),
-    AfterValidator(_no_invisible),
-]
 
 _READ = Depends(require_board_role("observer"))
 _WRITE = Depends(require_board_role("member"))
@@ -84,14 +85,6 @@ def visible_card_count(s: Session, board_id: int) -> int:
         )
     )
     return s.scalar(stmt) or 0
-
-
-def _out(card_id: int, prefix: str, number: int, list_id: int, title: str) -> dict[str, Any]:
-    return {"id": card_id, "key": f"{prefix}-{number}", "list_id": list_id, "title": title}
-
-
-def _card_out(prefix: str, card: Card) -> dict[str, Any]:
-    return _out(card.id, prefix, card.number, card.list_id, card.title)
 
 
 def _bump_counter(s: Session, board_id: int) -> None:
@@ -177,21 +170,7 @@ def _moved_by(s: Session, card_id: int, list_id: int, after_id: int | None) -> s
 
 @router.get("/api/boards/{board_id}/cards")
 def get_cards(ctx: BoardCtx = _READ, db: Session = Depends(get_db)):
-    prefix = ctx.board.key_prefix
-    stmt = (
-        select(Card.id, Card.number, Card.list_id, Card.title)
-        .join(BoardList, BoardList.id == Card.list_id)
-        .where(
-            Card.board_id == ctx.board.id,
-            Card.archived_at.is_(None),
-            BoardList.archived_at.is_(None),
-        )
-        .order_by(BoardList.position, BoardList.id, Card.position, Card.id)
-    )
-    return [
-        _out(card_id, prefix, number, lid, title)
-        for card_id, number, lid, title in db.execute(stmt)
-    ]
+    return visible_tiles(db, ctx.board.id, ctx.board.key_prefix)
 
 
 @router.post("/api/boards/{board_id}/cards", status_code=201)
@@ -223,7 +202,7 @@ def create_card(body: CreateBody, ctx: BoardCtx = _WRITE, db: Session = Depends(
         )
         _check_limit(s, board_id)
         card_id = result.inserted_primary_key[0]
-        out.update(_out(card_id, prefix, number, body.list_id, body.title))
+        out.update(tile_of(s, board_id, prefix, card_id))
         data.update(key=out["key"], title=body.title, list_id=body.list_id)
         return card_id
 
@@ -269,14 +248,14 @@ def move_card(
         ids = [i for i, _ in _visible_in_list(s, card.list_id)]
         at = ids.index(card_id)
         current = (card.list_id, ids[at - 1] if at else None)
-        out.update(_card_out(prefix, card))
+        out.update(tile_of(s, board_id, prefix, card_id))
         if current == (list_id, after_id):
             raise _NoChange
         if current != (body.from_list_id, body.from_after_id):
             raise _Moved(
                 {
                     "detail": "card_moved",
-                    "card": _card_out(prefix, card),
+                    "card": dict(out),
                     "after_id": current[1],
                     "moved_by": _moved_by(s, card_id, *current),
                 }
@@ -349,9 +328,10 @@ def copy_card(
                 created_at=_now(),
             )
         )
-        _check_limit(s, board_id)
         new_id = result.inserted_primary_key[0]
-        out.update(_out(new_id, prefix, number, source.list_id, title))
+        copy_links(s, board_id, source.id, new_id)
+        _check_limit(s, board_id)
+        out.update(tile_of(s, board_id, prefix, new_id))
         data.update(key=out["key"], from_key=f"{prefix}-{source.number}")
         return new_id
 

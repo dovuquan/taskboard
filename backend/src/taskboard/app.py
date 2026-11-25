@@ -5,13 +5,15 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from taskboard import auth, boards, cards, lists, members
+from taskboard import auth, boards, card_fields, cards, lists, members
 from taskboard.db import database_url, make_engine, run_migrations
 from taskboard.settings import allowed_hd
 
@@ -67,6 +69,14 @@ def create_app(url: str | None = None) -> FastAPI:
     app = FastAPI(title="Taskboard", lifespan=lifespan)
     app.state.engine = engine
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_request: Request, exc: RequestValidationError):
+        # FastAPI's own handler echoes each rejected value back. That would send a whole
+        # description to the client again, and a lone surrogate in it cannot even be encoded
+        # (a 500), so the echo (`input`, `ctx`) is dropped; type, location and message stay.
+        errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
+        return JSONResponse({"detail": jsonable_encoder(errors)}, status_code=422)
+
     @app.get("/health")
     def health():
         try:
@@ -89,6 +99,7 @@ def create_app(url: str | None = None) -> FastAPI:
     app.include_router(boards.router)
     app.include_router(lists.router)
     app.include_router(cards.router)
+    app.include_router(card_fields.router)
 
     web_dist = _web_dist()
     if web_dist.is_dir():

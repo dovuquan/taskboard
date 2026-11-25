@@ -66,6 +66,33 @@ def move_body(list_id, after_id, from_list_id, from_after_id):
     }
 
 
+TILE_KEYS = {
+    "id",
+    "key",
+    "list_id",
+    "title",
+    "label_ids",
+    "member_ids",
+    "due_on",
+    "has_description",
+}
+
+
+def tile(card_id, key, list_id, title, **extra):
+    """The full card tile for a card with no labels, members, due date or description."""
+    return {
+        "id": card_id,
+        "key": key,
+        "list_id": list_id,
+        "title": title,
+        "label_ids": [],
+        "member_ids": [],
+        "due_on": None,
+        "has_description": False,
+        **extra,
+    }
+
+
 def titles_by_list(client, board_id, list_ids):
     response = client.get(url(board_id))
     assert response.status_code == 200, response.text
@@ -97,7 +124,7 @@ def test_card_endpoints_need_a_session(client, method, path, body):
 # ---- get ------------------------------------------------------------------------
 
 
-def test_get_returns_visible_cards_in_order_with_only_four_fields(as_user, db_url):
+def test_get_returns_visible_cards_in_order_as_tiles(as_user, db_url):
     client, ada, board_id, first = board_with(as_user, db_url, "observer")
     second = add_list(db_url, board_id, "Second", 2.0)
     hidden = add_list(db_url, board_id, "Hidden", 1.5, archived_by=ada, archived_at=_now())
@@ -111,9 +138,9 @@ def test_get_returns_visible_cards_in_order_with_only_four_fields(as_user, db_ur
 
     assert response.status_code == 200
     assert response.json() == [
-        {"id": c1, "key": "TB-3", "list_id": first, "title": "c1"},
-        {"id": c2, "key": "TB-2", "list_id": first, "title": "c2"},
-        {"id": c3, "key": "TB-1", "list_id": second, "title": "c3"},
+        tile(c1, "TB-3", first, "c1"),
+        tile(c2, "TB-2", first, "c2"),
+        tile(c3, "TB-1", second, "c3"),
     ]
 
 
@@ -128,13 +155,8 @@ def test_create_appends_with_the_next_key_and_one_event(as_user, db_url):
     second = client.post(url(board_id), json={"list_id": list_id, "title": "Two"})
 
     assert first.status_code == 201 and second.status_code == 201
-    assert first.json() == {
-        "id": first.json()["id"],
-        "key": "TB-1",
-        "list_id": list_id,
-        "title": "One",
-    }
-    assert set(second.json()) == {"id", "key", "list_id", "title"}
+    assert first.json() == tile(first.json()["id"], "TB-1", list_id, "One")
+    assert set(second.json()) == TILE_KEYS
     assert second.json()["key"] == "TB-2"
     assert titles_by_list(client, board_id, [list_id]) == {list_id: ["One", "Two"]}
     assert counter(db_url, board_id) == 3
@@ -270,7 +292,7 @@ def test_archived_cards_and_cards_in_archived_lists_do_not_count(as_user, db_url
 
     assert response.status_code == 201
     body = response.json()
-    assert body == {"id": body["id"], "key": body["key"], "list_id": list_id, "title": "Fits"}
+    assert body == tile(body["id"], body["key"], list_id, "Fits")
     [event] = events(db_url)[before:]
     assert (event.kind, event.subject_id) == ("card.created", str(body["id"]))
     assert event.data == {"key": body["key"], "title": "Fits", "list_id": list_id}
@@ -378,7 +400,7 @@ def test_move_reorders_within_and_between_lists(as_user, db_url, mover, target, 
     )
 
     assert response.status_code == 200, response.text
-    assert set(response.json()) == {"id", "key", "list_id", "title"}
+    assert set(response.json()) == TILE_KEYS
     assert response.json()["list_id"] == lists[target]
     assert titles_by_list(client, board_id, list(lists.values())) == {
         lists[k]: v for k, v in expected.items()
@@ -574,7 +596,7 @@ def test_a_stale_move_is_a_conflict_that_names_who_moved_the_card(as_user, db_ur
     assert response.status_code == 409
     assert response.json() == {
         "detail": "card_moved",
-        "card": {"id": cards["a1"], "key": "TB-1", "list_id": lists["B"], "title": "a1"},
+        "card": tile(cards["a1"], "TB-1", lists["B"], "a1"),
         "after_id": None,
         "moved_by": "Boss",
     }
@@ -599,7 +621,7 @@ def test_a_stale_move_reports_the_card_above_and_no_name_without_an_event(
     assert response.status_code == 409
     assert response.json() == {
         "detail": "card_moved",
-        "card": {"id": cards["a1"], "key": "TB-1", "list_id": lists["B"], "title": "a1"},
+        "card": tile(cards["a1"], "TB-1", lists["B"], "a1"),
         "after_id": cards["b1"],
         "moved_by": None,
     }
@@ -648,7 +670,7 @@ def test_a_neighbour_changing_makes_the_next_drag_stale_with_no_name(as_user, db
     assert response.status_code == 409
     assert response.json() == {
         "detail": "card_moved",
-        "card": {"id": cards["a3"], "key": "TB-3", "list_id": la, "title": "a3"},
+        "card": tile(cards["a3"], "TB-3", la, "a3"),
         "after_id": new_predecessor,
         "moved_by": None,
     }
@@ -668,12 +690,7 @@ def test_a_move_someone_else_already_made_is_ok_and_writes_no_event(as_user, db_
     )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "id": cards["a1"],
-        "key": "TB-1",
-        "list_id": lists["B"],
-        "title": "a1",
-    }
+    assert response.json() == tile(cards["a1"], "TB-1", lists["B"], "a1")
     row = card_row(db_url, cards["a1"])
     assert (row.list_id, row.position) == (lists["B"], 0.5)
     assert len(events(db_url)) == before
@@ -712,7 +729,9 @@ def test_copy_places_the_new_card_after_the_source(as_user, db_url):
 
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body == {"id": body["id"], "key": "TB-3", "list_id": list_id, "title": "a1 (copy)"}
+    assert body == tile(
+        body["id"], "TB-3", list_id, "a1 (copy)", due_on="2026-05-01", has_description=True
+    )
     assert titles_by_list(client, board_id, [list_id]) == {list_id: ["a1", "a1 (copy)", "a2"]}
     row = card_row(db_url, body["id"])
     assert (row.description, row.due_at, row.number, row.created_by) == ("Words", due, 3, ada)
@@ -736,12 +755,7 @@ def test_copy_cuts_a_long_title_so_the_copy_is_exactly_200(as_user, db_url):
 
     assert response.status_code == 201
     body = response.json()
-    assert body == {
-        "id": body["id"],
-        "key": "TB-2",
-        "list_id": list_id,
-        "title": "x" * 193 + " (copy)",
-    }
+    assert body == tile(body["id"], "TB-2", list_id, "x" * 193 + " (copy)")
     assert len(body["title"]) == 200
     [event] = events(db_url)[before:]
     assert (event.kind, event.subject_id) == ("card.copied", str(body["id"]))
@@ -926,16 +940,11 @@ def test_role_matrix(as_user, db_url, action, actor, visibility):
             body = response.json()
             key = body["key"]
             if action == "create":
-                assert body == {
-                    "id": body["id"],
-                    "key": f"TB-{start}",
-                    "list_id": list_id,
-                    "title": "New",
-                }
+                assert body == tile(body["id"], f"TB-{start}", list_id, "New")
                 assert (event.kind, event.subject_id) == ("card.created", str(body["id"]))
                 assert event.data == {"key": key, "title": "New", "list_id": list_id}
             elif action == "move":
-                assert body == {"id": ids[0], "key": "TB-1", "list_id": list_id, "title": "A"}
+                assert body == tile(ids[0], "TB-1", list_id, "A")
                 assert (event.kind, event.subject_id) == ("card.moved", str(ids[0]))
                 assert event.data == {
                     "key": "TB-1",
@@ -944,12 +953,7 @@ def test_role_matrix(as_user, db_url, action, actor, visibility):
                     "after_id": ids[1],
                 }
             else:
-                assert body == {
-                    "id": body["id"],
-                    "key": f"TB-{start}",
-                    "list_id": list_id,
-                    "title": "A (copy)",
-                }
+                assert body == tile(body["id"], f"TB-{start}", list_id, "A (copy)")
                 assert (event.kind, event.subject_id) == ("card.copied", str(body["id"]))
                 assert event.data == {"key": key, "from_key": "TB-1"}
     else:

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from taskboard.auth import current_user, get_db, require_admin
 from taskboard.events import record_change
-from taskboard.models import Board, BoardMember, Event, User, WorkspaceMember
+from taskboard.models import Board, BoardMember, Card, CardMember, Event, User, WorkspaceMember
 
 router = APIRouter()
 
@@ -185,6 +185,26 @@ def _ensure_acting_owner(
     ws = s.scalar(select(WorkspaceMember.role).where(WorkspaceMember.user_id == actor_id))
     if ws != "admin":
         raise NotOwner
+
+
+def _drop_assignments(s: Session, board_id: int, user_id: int, data: dict[str, Any]) -> None:
+    """The person can no longer work on this board: take them off its cards, archived included.
+
+    Their assignments on other boards stay. The event data names the cards, only when there are any.
+    """
+    ids = list(
+        s.scalars(
+            select(Card.id)
+            .join(CardMember, CardMember.card_id == Card.id)
+            .where(Card.board_id == board_id, CardMember.user_id == user_id)
+            .order_by(Card.id)
+        )
+    )
+    if ids:
+        s.execute(
+            delete(CardMember).where(CardMember.user_id == user_id, CardMember.card_id.in_(ids))
+        )
+        data["unassigned_card_ids"] = ids
 
 
 _ORDER = (
@@ -449,6 +469,8 @@ def change_board_role(
     if old == "owner" and _owner_count(db, board_id) == 1:
         raise HTTPException(409, "last_owner")
 
+    data: dict[str, Any] = {"user_id": user_id, "from": old, "to": role}
+
     def change(s: Session) -> None:
         # The conditional UPDATE takes SQLite's write lock, so what follows sees committed state.
         result = s.execute(
@@ -467,6 +489,8 @@ def change_board_role(
         )
         if _owner_count(s, board_id) == 0:
             raise LastOwner
+        if role == "observer":
+            _drop_assignments(s, board_id, user_id, data)
 
     try:
         record_change(
@@ -476,7 +500,7 @@ def change_board_role(
             kind="board_member.role_changed",
             subject_type="board",
             subject_id=str(board_id),
-            data={"user_id": user_id, "from": old, "to": role},
+            data=data,
             board_id=board_id,
         )
     except _AlreadyChanged:
@@ -504,7 +528,9 @@ def remove_board_member(
         if old == "owner" and _owner_count(db, board_id) == 1:
             raise HTTPException(409, "last_owner")
 
-        def change(s: Session, old: str = old) -> None:
+        data: dict[str, Any] = {"user_id": user_id, "role": old}
+
+        def change(s: Session, old: str = old, data: dict[str, Any] = data) -> None:
             result = s.execute(
                 delete(BoardMember).where(
                     BoardMember.board_id == board_id,
@@ -519,6 +545,7 @@ def remove_board_member(
             )
             if _owner_count(s, board_id) == 0:
                 raise LastOwner
+            _drop_assignments(s, board_id, user_id, data)
 
         try:
             record_change(
@@ -528,7 +555,7 @@ def remove_board_member(
                 kind="board_member.removed",
                 subject_type="board",
                 subject_id=str(board_id),
-                data={"user_id": user_id, "role": old},
+                data=data,
                 board_id=board_id,
             )
         except _AlreadyChanged:

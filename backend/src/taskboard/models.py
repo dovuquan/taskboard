@@ -140,3 +140,31 @@ class Card(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class Label(Base):
+    """One of the workspace's fixed labels; `color` is the suffix of the `--l-<color>` token."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True)
+    color: Mapped[str] = mapped_column(String)
+
+
+class CardMember(Base):
+    """A person assigned to a card."""
+
+    __tablename__ = "card_members"
+
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
+
+
+class CardLabel(Base):
+    """A label put on a card."""
+
+    __tablename__ = "card_labels"
+
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), primary_key=True)
+    label_id: Mapped[int] = mapped_column(ForeignKey("labels.id"), primary_key=True, index=True)
