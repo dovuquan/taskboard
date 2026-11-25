@@ -1,17 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import type { Card } from "../api";
+import type { Card, CardDetail } from "../api";
 import {
   CARD_LIMIT,
   type ByList,
+  DESCRIPTION_LIMIT,
+  acceptDetail,
+  assignablePeople,
   canAddCard,
+  createSaveTracker,
+  descriptionToSend,
+  draftDirty,
+  escapeAction,
+  fieldKey,
+  findByKey,
   groupByList,
+  insertAfterCard,
+  matchPeople,
   oneLine,
   placeCard,
   planCardDrop,
+  readField,
   revertCardMove,
   shouldApply,
+  shouldRefetchDetail,
+  showPeopleSearch,
+  tileOf,
+  titleFrom,
   ungroup,
+  withField,
 } from "./logic";
 
 const card = (id: number, list_id: number, title = `Card ${id}`): Card => ({
@@ -19,6 +36,10 @@ const card = (id: number, list_id: number, title = `Card ${id}`): Card => ({
   key: `TB-${id}`,
   list_id,
   title,
+  label_ids: [],
+  member_ids: [],
+  due_on: null,
+  has_description: false,
 });
 
 const lists = [{ id: 1 }, { id: 2 }, { id: 3 }];
@@ -248,5 +269,290 @@ describe("oneLine", () => {
   it("keeps spaces inside a line and returns empty for blank text", () => {
     expect(oneLine("two  spaces")).toBe("two  spaces");
     expect(oneLine(" \n \n ")).toBe("");
+  });
+});
+
+const full = (id: number, over: Partial<Card> = {}): Card => ({ ...card(id, 1), ...over });
+
+describe("findByKey", () => {
+  const cards = [card(1, 1), card(2, 1), card(12, 2)];
+
+  it("finds a card by its exact key", () => {
+    expect(findByKey(cards, "TB-2")?.id).toBe(2);
+    expect(findByKey(cards, "TB-12")?.id).toBe(12);
+  });
+
+  it("is case-sensitive and never matches part of a key", () => {
+    expect(findByKey(cards, "tb-2")).toBeNull();
+    expect(findByKey(cards, "TB-1x")).toBeNull();
+    expect(findByKey(cards, "TB-")).toBeNull();
+    expect(findByKey(cards, "TB-2 ")).toBeNull();
+    expect(findByKey(cards, "")).toBeNull();
+    expect(findByKey(cards, "TB-99")).toBeNull();
+  });
+});
+
+describe("tileOf", () => {
+  it("drops the description and keeps every tile field", () => {
+    const detail: CardDetail = {
+      ...full(5, { label_ids: [1, 2], member_ids: [3], due_on: "2026-11-30", has_description: true }),
+      description: "Hello",
+    };
+    expect(tileOf(detail)).toEqual({
+      id: 5,
+      key: "TB-5",
+      list_id: 1,
+      title: "Card 5",
+      label_ids: [1, 2],
+      member_ids: [3],
+      due_on: "2026-11-30",
+      has_description: true,
+    });
+  });
+});
+
+describe("insertAfterCard", () => {
+  it("puts the new card right after its source", () => {
+    const next = insertAfterCard([card(1, 1), card(2, 1), card(3, 2)], 1, card(9, 1));
+    expect(ids(next)).toEqual([1, 9, 2, 3]);
+  });
+
+  it("appends when the source is not there", () => {
+    expect(ids(insertAfterCard([card(1, 1)], 77, card(9, 1)))).toEqual([1, 9]);
+  });
+
+  it("does not add the same card twice", () => {
+    const cards = [card(1, 1), card(9, 1)];
+    expect(insertAfterCard(cards, 1, card(9, 1))).toBe(cards);
+  });
+});
+
+describe("card fields", () => {
+  it("names each field with its own key", () => {
+    expect(fieldKey({ kind: "title", value: "x" })).toBe("title");
+    expect(fieldKey({ kind: "due", value: null })).toBe("due");
+    expect(fieldKey({ kind: "label", id: 3, on: true })).toBe("label:3");
+    expect(fieldKey({ kind: "member", id: 5, on: false })).toBe("member:5");
+  });
+
+  it("sets the title and the due date", () => {
+    expect(withField(full(1), { kind: "title", value: "New" }).title).toBe("New");
+    expect(withField(full(1), { kind: "due", value: "2026-12-01" }).due_on).toBe("2026-12-01");
+    expect(withField(full(1, { due_on: "2026-12-01" }), { kind: "due", value: null }).due_on).toBeNull();
+  });
+
+  it("adds and removes a label or a member without duplicates", () => {
+    const c = full(1, { label_ids: [1], member_ids: [4] });
+    expect(withField(c, { kind: "label", id: 2, on: true }).label_ids).toEqual([1, 2]);
+    expect(withField(c, { kind: "label", id: 1, on: true }).label_ids).toEqual([1]);
+    expect(withField(c, { kind: "label", id: 1, on: false }).label_ids).toEqual([]);
+    expect(withField(c, { kind: "label", id: 9, on: false }).label_ids).toEqual([1]);
+    expect(withField(c, { kind: "member", id: 5, on: true }).member_ids).toEqual([4, 5]);
+    expect(withField(c, { kind: "member", id: 4, on: false }).member_ids).toEqual([]);
+  });
+
+  it("leaves the other fields and the input alone", () => {
+    const c = full(1, { label_ids: [1], title: "Keep" });
+    const next = withField(c, { kind: "due", value: "2026-12-01" });
+    expect(next.title).toBe("Keep");
+    expect(next.label_ids).toEqual([1]);
+    expect(c.due_on).toBeNull();
+  });
+
+  it("reads the current value in the same shape", () => {
+    const c = full(1, { title: "T", due_on: "2026-12-01", label_ids: [2], member_ids: [] });
+    expect(readField(c, { kind: "title", value: "other" })).toEqual({ kind: "title", value: "T" });
+    expect(readField(c, { kind: "due", value: null })).toEqual({ kind: "due", value: "2026-12-01" });
+    expect(readField(c, { kind: "label", id: 2, on: false })).toEqual({ kind: "label", id: 2, on: true });
+    expect(readField(c, { kind: "member", id: 7, on: true })).toEqual({ kind: "member", id: 7, on: false });
+  });
+});
+
+describe("save tracker", () => {
+  const title = (value: string) => ({ kind: "title", value }) as const;
+
+  it("applies the server's value after a lone success", () => {
+    const t = createSaveTracker();
+    const n = t.start("title", title("A"));
+    expect(t.settle("title", n, { ok: true, value: title("B") })).toEqual({
+      kind: "apply",
+      value: title("B"),
+    });
+  });
+
+  it("goes back to the value before after a lone failure", () => {
+    const t = createSaveTracker();
+    const n = t.start("title", title("A"));
+    expect(t.settle("title", n, { ok: false })).toEqual({ kind: "revert", value: title("A") });
+  });
+
+  it("ignores an older answer that arrives after a newer one", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    const second = t.start("title", title("B"));
+    expect(t.settle("title", second, { ok: true, value: title("C") }).kind).toBe("apply");
+    expect(t.settle("title", first, { ok: true, value: title("B") })).toEqual({ kind: "keep" });
+  });
+
+  it("ignores an older answer that arrives first", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    const second = t.start("title", title("B"));
+    expect(t.settle("title", first, { ok: true, value: title("B") })).toEqual({ kind: "keep" });
+    expect(t.settle("title", second, { ok: true, value: title("C") })).toEqual({
+      kind: "apply",
+      value: title("C"),
+    });
+  });
+
+  it("does not undo a newer change when an older save fails", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    const second = t.start("title", title("B"));
+    expect(t.settle("title", first, { ok: false })).toEqual({ kind: "keep" });
+    expect(t.settle("title", second, { ok: true, value: title("C") }).kind).toBe("apply");
+  });
+
+  it("falls back to what the server last confirmed when the newest save fails", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    const second = t.start("title", title("B"));
+    t.settle("title", first, { ok: true, value: title("B") });
+    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("B") });
+  });
+
+  it("falls back to the original when every save fails", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    const second = t.start("title", title("B"));
+    t.settle("title", first, { ok: false });
+    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("A") });
+  });
+
+  it("starts a fresh chain once nothing is in flight", () => {
+    const t = createSaveTracker();
+    const first = t.start("title", title("A"));
+    t.settle("title", first, { ok: true, value: title("B") });
+    const second = t.start("title", title("B"));
+    expect(t.settle("title", second, { ok: false })).toEqual({ kind: "revert", value: title("B") });
+  });
+
+  it("keeps fields apart", () => {
+    const t = createSaveTracker();
+    const a = t.start("label:1", { kind: "label", id: 1, on: false });
+    const b = t.start("label:2", { kind: "label", id: 2, on: false });
+    expect(t.settle("label:1", a, { ok: false }).kind).toBe("revert");
+    expect(t.settle("label:2", b, { ok: true, value: { kind: "label", id: 2, on: true } }).kind).toBe(
+      "apply",
+    );
+  });
+});
+
+describe("titleFrom", () => {
+  it("joins lines and trims", () => {
+    expect(titleFrom("  Pack\nboxes ")).toBe("Pack boxes");
+  });
+
+  it("refuses an empty title and one over 200 characters", () => {
+    expect(titleFrom("  \n ")).toBeNull();
+    expect(titleFrom("a".repeat(200))).toBe("a".repeat(200));
+    expect(titleFrom("a".repeat(201))).toBeNull();
+  });
+});
+
+describe("people for a card", () => {
+  const person = (id: number, role: "owner" | "member" | "observer", name = `Person ${id}`) => ({
+    id,
+    role,
+    name,
+    email: `p${id}@example.com`,
+  });
+
+  it("leaves observers out of the picker", () => {
+    const people = [person(1, "owner"), person(2, "member"), person(3, "observer")];
+    expect(assignablePeople(people).map((p) => p.id)).toEqual([1, 2]);
+  });
+
+  it("shows the search box for 9 people, not for 8", () => {
+    expect(showPeopleSearch(8)).toBe(false);
+    expect(showPeopleSearch(9)).toBe(true);
+    expect(showPeopleSearch(0)).toBe(false);
+  });
+
+  it("matches name or email, ignoring case and spaces around the query", () => {
+    const people = [person(1, "owner", "Ann Lee"), person(2, "member", "Bo Tran")];
+    expect(matchPeople(people, " ann ").map((p) => p.id)).toEqual([1]);
+    expect(matchPeople(people, "P2@EXAMPLE").map((p) => p.id)).toEqual([2]);
+    expect(matchPeople(people, "").map((p) => p.id)).toEqual([1, 2]);
+    expect(matchPeople(people, "zzz")).toEqual([]);
+  });
+
+  it("matches people with no name by email", () => {
+    const people = [{ id: 1, role: "member" as const, name: null, email: "kim@example.com" }];
+    expect(matchPeople(people, "kim")).toHaveLength(1);
+  });
+});
+
+describe("description draft", () => {
+  it("allows 10,000 characters", () => {
+    expect(DESCRIPTION_LIMIT).toBe(10000);
+  });
+
+  it("is dirty only when it differs from what the server has", () => {
+    expect(draftDirty("Hello", "Hello")).toBe(false);
+    expect(draftDirty("Hello", "Hello!")).toBe(true);
+    expect(draftDirty(null, "")).toBe(false);
+    expect(draftDirty(null, "x")).toBe(true);
+  });
+
+  it("sends null for blank text and the text as typed otherwise", () => {
+    expect(descriptionToSend("  \n ")).toBeNull();
+    expect(descriptionToSend("")).toBeNull();
+    expect(descriptionToSend(" a\nb ")).toBe(" a\nb ");
+  });
+});
+
+describe("escapeAction", () => {
+  const base = { popup: false, typingInDraft: false, typing: false };
+
+  it("closes a popup first, whatever else is going on", () => {
+    expect(escapeAction({ popup: true, typingInDraft: true, typing: true })).toBe("close-popup");
+  });
+
+  it("cancels the description edit when typing in it", () => {
+    expect(escapeAction({ ...base, typingInDraft: true, typing: true })).toBe("cancel-draft");
+  });
+
+  it("blurs any other field", () => {
+    expect(escapeAction({ ...base, typing: true })).toBe("blur");
+  });
+
+  it("closes the dialog when nothing else is open", () => {
+    expect(escapeAction(base)).toBe("close");
+  });
+});
+
+describe("refetching the open card after a poll", () => {
+  it("refetches only with the card open, no draft and no description save", () => {
+    expect(shouldRefetchDetail({ open: true, draft: false, saving: false })).toBe(true);
+    expect(shouldRefetchDetail({ open: true, draft: true, saving: false })).toBe(false);
+    expect(shouldRefetchDetail({ open: true, draft: false, saving: true })).toBe(false);
+    expect(shouldRefetchDetail({ open: false, draft: false, saving: false })).toBe(false);
+  });
+
+  const ok = { openId: 5, fetchedId: 5, draft: false, startVersion: 2, version: 2 };
+
+  it("accepts an answer for the open card when nothing changed meanwhile", () => {
+    expect(acceptDetail(ok)).toBe(true);
+  });
+
+  it("drops the answer when a draft was opened while it was out", () => {
+    expect(acceptDetail({ ...ok, draft: true })).toBe(false);
+  });
+
+  it("drops the answer when the description changed or the card is another one", () => {
+    expect(acceptDetail({ ...ok, version: 3 })).toBe(false);
+    expect(acceptDetail({ ...ok, openId: 6 })).toBe(false);
+    expect(acceptDetail({ ...ok, openId: null })).toBe(false);
   });
 });

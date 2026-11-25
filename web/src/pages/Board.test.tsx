@@ -1,7 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { BoardDetail } from "../api";
+import type { BoardDetail, Card, Label } from "../api";
 import { BoardView } from "./Board";
 
 const ann = { id: 1, name: "Ann Lee", email: "ann@example.com", avatar_url: null };
@@ -189,12 +189,30 @@ describe("BoardView lanes", () => {
   });
 });
 
-const card = (id: number, list_id: number, title: string) => ({
+const card = (id: number, list_id: number, title: string, over: Partial<Card> = {}): Card => ({
   id,
   key: `TB-${id}`,
   list_id,
   title,
+  label_ids: [],
+  member_ids: [],
+  due_on: null,
+  has_description: false,
+  ...over,
 });
+
+const labels: Label[] = [
+  { id: 1, name: "Launch", color: "launch" },
+  { id: 2, name: "Bug", color: "bug" },
+];
+
+const people = [
+  { id: 1, name: "Ann Lee", email: "ann@example.com", avatar_url: null },
+  { id: 2, name: "Bo Tran", email: "bo@example.com", avatar_url: null },
+  { id: 3, name: null, email: "cy@example.com", avatar_url: null },
+  { id: 4, name: "Di Ho", email: "di@example.com", avatar_url: null },
+  { id: 5, name: "Ed Fu", email: "ed@example.com", avatar_url: null },
+];
 
 const cards = [
   card(1, 11, "Pack boxes"),
@@ -232,10 +250,21 @@ describe("BoardView cards", () => {
     expect(html).not.toContain("Pack boxes");
   });
 
-  it("does not make a tile a button yet", () => {
+  it("makes every tile a button that can take focus, for observers too", () => {
+    for (const my_role of ["owner", "member", "observer"] as const) {
+      const { html } = render({ board: board({ my_role }), lists: some, cards });
+      const tiles = html.match(/<div class="card[^"]*"[^>]*>/g) ?? [];
+      expect(tiles).toHaveLength(4);
+      for (const tile of tiles) {
+        expect(tile).toContain('role="button"');
+        expect(tile).toContain('tabindex="0"');
+      }
+    }
+  });
+
+  it("leaves the tile's own text as its accessible name", () => {
     const { html } = render({ lists: some, cards });
-    expect(html).not.toContain('role="button"');
-    expect(html).not.toContain("tabindex");
+    expect(html).not.toMatch(/<div class="card[^"]*"[^>]*aria-label=/);
   });
 
   it("shows the number of cards in each lane header", () => {
@@ -319,6 +348,88 @@ describe("BoardView cards", () => {
     const none = render({ lists: some, cards, lanes: { menu: 13 } }).text;
     expect(none).toContain("Archive list");
     expect(none).not.toContain("Archive list and its");
+  });
+});
+
+describe("BoardView card tile details", () => {
+  const tileOf = (html: string, key: string) => {
+    const start = html.indexOf(`>${key}</span>`);
+    const end = html.indexOf("</div>", start);
+    return html.slice(start, end);
+  };
+  const draw = (c: Card, over: Partial<Props> = {}) =>
+    render({ lists: some, cards: [c], labels, people, ...over });
+
+  it("shows the labels with their names, colour and text colour", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { label_ids: [2, 1] }));
+    const tile = tileOf(html, "TB-1");
+    expect(tile).toContain('<span class="labels">');
+    expect(tile).toContain('class="lbl"');
+    expect(tile).toContain("--c:var(--l-bug)");
+    expect(tile.indexOf("Bug")).toBeLessThan(tile.indexOf("Launch"));
+    expect(tile.indexOf('class="labels"')).toBeLessThan(tile.indexOf('class="title"'));
+  });
+
+  it("shows no label row or badges for a plain card", () => {
+    const { html } = draw(card(1, 11, "Pack boxes"));
+    expect(tileOf(html, "TB-1")).not.toContain('class="labels"');
+    expect(tileOf(html, "TB-1")).not.toContain('class="badges"');
+  });
+
+  it("shows an overdue due date with the date and words for screen readers", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { due_on: "2000-01-05" }));
+    const tile = tileOf(html, "TB-1");
+    expect(tile).toContain("b due over");
+    expect(tile).toContain("5 Jan");
+    expect(tile).toContain('title="Due 5 Jan, overdue"');
+    expect(tile).toMatch(/class="sr"[^>]*>Due 5 Jan, overdue</);
+  });
+
+  it("shows a far due date with no state", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { due_on: "2999-12-31" }));
+    const tile = tileOf(html, "TB-1");
+    expect(tile).toContain('class="b due"');
+    expect(tile).toContain('title="Due 31 Dec"');
+    expect(tile).not.toContain("overdue");
+    expect(tile).not.toContain("due soon");
+  });
+
+  it("marks a card that has a description", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { has_description: true }));
+    expect(tileOf(html, "TB-1")).toContain('title="Has a description"');
+    expect(tileOf(html, "TB-1")).toMatch(/class="sr"[^>]*>Has a description</);
+  });
+
+  it("shows the assigned people, names for screen readers and the avatars hidden from them", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { member_ids: [1, 3] }));
+    const tile = tileOf(html, "TB-1");
+    expect(tile).toContain('class="stack" aria-hidden="true"');
+    expect(tile).toContain(">AL<");
+    expect(tile).toMatch(/class="sr"[^>]*>Assigned to Ann Lee, cy@example.com</);
+  });
+
+  it("shows four avatars and a +N chip for more", () => {
+    const { html } = draw(card(1, 11, "Pack boxes", { member_ids: [1, 2, 3, 4, 5] }));
+    const tile = tileOf(html, "TB-1");
+    expect((tile.match(/class="avatar"/g) ?? []).length).toBe(4);
+    expect(tile).toContain("+1");
+  });
+
+  it("shows the same to an observer", () => {
+    const { html } = draw(
+      card(1, 11, "Pack boxes", { label_ids: [1], due_on: "2000-01-05", has_description: true, member_ids: [1] }),
+      { board: board({ my_role: "observer" }) },
+    );
+    const tile = tileOf(html, "TB-1");
+    expect(tile).toContain("Launch");
+    expect(tile).toContain("5 Jan");
+    expect(tile).toContain("Has a description");
+    expect(tile).toContain(">AL<");
+  });
+
+  it("renders the card dialog slot after the board", () => {
+    const { html } = render({ lists: some, cards, dialog: <aside id="card-slot">dialog</aside> });
+    expect(html.indexOf("Office move")).toBeLessThan(html.indexOf('id="card-slot"'));
   });
 });
 

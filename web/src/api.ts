@@ -253,10 +253,35 @@ export const archiveList = (boardId: number, listId: number) =>
 export const restoreList = (boardId: number, listId: number) =>
   callList<BoardList>("POST", `/api/boards/${boardId}/lists/${listId}/restore`);
 
-/** A card as the cards endpoints return it; `key` is the server's TB-n. */
-export type Card = { id: number; key: string; list_id: number; title: string };
+/** A card tile as the cards endpoints return it; `key` is the server's TB-n. */
+export type Card = {
+  id: number;
+  key: string;
+  list_id: number;
+  title: string;
+  label_ids: number[];
+  member_ids: number[];
+  /** The due day as YYYY-MM-DD, or null. */
+  due_on: string | null;
+  has_description: boolean;
+};
 
-export type CardError = BoardError | "card_limit" | "card_not_found" | "list_not_found";
+/** One card with its description, as `GET` and the card edits return it. */
+export type CardDetail = Card & { description: string | null };
+
+/** One of the board's labels; `color` is the suffix of the `--l-<color>` token. */
+export type Label = { id: number; name: string; color: string };
+
+/** The change `PATCH` takes: exactly one field. */
+export type CardChange = { title: string } | { description: string | null } | { due_on: string | null };
+
+export type CardError =
+  | BoardError
+  | "card_limit"
+  | "card_not_found"
+  | "list_not_found"
+  | "not_assignable"
+  | "label_not_found";
 export type CardsResult<T> = { kind: "ok"; data: T } | { kind: CardError };
 
 /** What a drop tells the server: where the card goes and where it was, for the stale check. */
@@ -280,7 +305,9 @@ function cardFailure(status: number, body: unknown): CardError {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (status === 404 && detail === "card_not_found") return "card_not_found";
   if (status === 404 && detail === "list_not_found") return "list_not_found";
+  if (status === 404 && detail === "label_not_found") return "label_not_found";
   if (status === 422 && detail === "card_limit") return "card_limit";
+  if (status === 422 && detail === "not_assignable") return "not_assignable";
   return boardFailure(status, body);
 }
 
@@ -294,6 +321,20 @@ export const createCard = (boardId: number, listId: number, title: string) =>
   callCard<Card>("POST", `/api/boards/${boardId}/cards`, { list_id: listId, title });
 export const copyCard = (boardId: number, cardId: number) =>
   callCard<Card>("POST", `/api/boards/${boardId}/cards/${cardId}/copy`, {});
+
+export const getLabels = () => callCard<Label[]>("GET", "/api/labels");
+export const getCard = (boardId: number, cardId: number) =>
+  callCard<CardDetail>("GET", `/api/boards/${boardId}/cards/${cardId}`);
+export const patchCard = (boardId: number, cardId: number, change: CardChange) =>
+  callCard<CardDetail>("PATCH", `/api/boards/${boardId}/cards/${cardId}`, change);
+export const addCardMember = (boardId: number, cardId: number, userId: number) =>
+  callCard<CardDetail>("PUT", `/api/boards/${boardId}/cards/${cardId}/members/${userId}`);
+export const removeCardMember = (boardId: number, cardId: number, userId: number) =>
+  callCard<CardDetail>("DELETE", `/api/boards/${boardId}/cards/${cardId}/members/${userId}`);
+export const addCardLabel = (boardId: number, cardId: number, labelId: number) =>
+  callCard<CardDetail>("PUT", `/api/boards/${boardId}/cards/${cardId}/labels/${labelId}`);
+export const removeCardLabel = (boardId: number, cardId: number, labelId: number) =>
+  callCard<CardDetail>("DELETE", `/api/boards/${boardId}/cards/${cardId}/labels/${labelId}`);
 
 export async function moveCard(boardId: number, cardId: number, move: CardMove): Promise<MoveResult> {
   const res = await send(`/api/boards/${boardId}/cards/${cardId}/move`, {

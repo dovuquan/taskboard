@@ -8,6 +8,10 @@ const card = (id: number, list_id: number, title = `Card ${id}`): Card => ({
   key: `TB-${id}`,
   list_id,
   title,
+  label_ids: [],
+  member_ids: [],
+  due_on: null,
+  has_description: false,
 });
 
 const lists = [
@@ -34,6 +38,28 @@ describe("applyMoveResult", () => {
       toast: "Moved TB-11 to Doing",
       reload: false,
     });
+  });
+
+  it("keeps the whole tile when the server's copy or a local revert replaces a card", () => {
+    const rich: Card = {
+      ...card(11, 2),
+      label_ids: [1, 2],
+      member_ids: [3],
+      due_on: "2026-12-01",
+      has_description: true,
+    };
+    const shown = onScreen.map((c) => (c.id === 11 ? { ...rich, list_id: 2 } : c));
+    const ok = applyMoveResult(shown, lists, plan, { kind: "ok", data: rich });
+    expect(ok.cards.find((c) => c.id === 11)).toEqual(rich);
+    const moved = applyMoveResult(shown, lists, plan, {
+      kind: "card_moved",
+      card: { ...rich, list_id: 3 },
+      after_id: null,
+      moved_by: null,
+    });
+    expect(moved.cards.find((c) => c.id === 11)).toEqual({ ...rich, list_id: 3 });
+    const failed = applyMoveResult(shown, lists, plan, { kind: "network" });
+    expect(failed.cards.find((c) => c.id === 11)).toEqual({ ...rich, list_id: 1 });
   });
 
   it("names an unknown list on success", () => {

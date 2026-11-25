@@ -2,14 +2,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   addBoardMember,
+  addCardLabel,
+  addCardMember,
   archiveList,
   copyCard,
   createBoard,
   createCard,
   createList,
   getBoard,
+  getCard,
   getCards,
+  getLabels,
   moveCard,
+  patchCard,
+  removeCardLabel,
+  removeCardMember,
   getLists,
   moveList,
   renameList,
@@ -537,6 +544,98 @@ describe("cards api", () => {
     throwing();
     expect(await getCards(7)).toEqual({ kind: "network" });
     expect(await moveCard(7, 9, move)).toEqual({ kind: "network" });
+  });
+});
+
+describe("card detail api", () => {
+  const detail = {
+    id: 9,
+    key: "TB-9",
+    list_id: 4,
+    title: "Pack boxes",
+    label_ids: [1],
+    member_ids: [2],
+    due_on: "2026-12-01",
+    has_description: true,
+    description: "Hello",
+  };
+
+  function call(fetchMock: ReturnType<typeof stubFetch>) {
+    return fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  }
+
+  it("reads the labels", async () => {
+    const labels = [{ id: 1, name: "Launch", color: "launch" }];
+    const fetchMock = stubFetch(async () => reply(200, labels));
+    expect(await getLabels()).toEqual({ kind: "ok", data: labels });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/labels");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("reads one card", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await getCard(7, 9)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9");
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+  });
+
+  it.each([
+    [{ title: "New" }, '{"title":"New"}'],
+    [{ description: "Text" }, '{"description":"Text"}'],
+    [{ description: null }, '{"description":null}'],
+    [{ due_on: "2026-12-01" }, '{"due_on":"2026-12-01"}'],
+    [{ due_on: null }, '{"due_on":null}'],
+  ])("patches %j with exactly that body", async (change, body) => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await patchCard(7, 9, change)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(body);
+    expect(init.headers).toEqual({ "content-type": "application/json" });
+  });
+
+  it.each([
+    ["adds a member", () => addCardMember(7, 9, 5), "PUT", "/api/boards/7/cards/9/members/5"],
+    ["removes a member", () => removeCardMember(7, 9, 5), "DELETE", "/api/boards/7/cards/9/members/5"],
+    ["adds a label", () => addCardLabel(7, 9, 3), "PUT", "/api/boards/7/cards/9/labels/3"],
+    ["removes a label", () => removeCardLabel(7, 9, 3), "DELETE", "/api/boards/7/cards/9/labels/3"],
+  ])("%s with no body", async (_name, run, method, path) => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await run()).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe(path);
+    expect(init.method).toBe(method);
+    expect(init.body).toBeUndefined();
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it.each([
+    [422, { detail: "not_assignable" }, "not_assignable"],
+    [404, { detail: "label_not_found" }, "label_not_found"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [422, [{ type: "string_too_short", loc: ["body", "title"], msg: "too short" }], "invalid"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "not_signed_in" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await getCard(7, 9)).toEqual({ kind });
+    expect(await patchCard(7, 9, { title: "x" })).toEqual({ kind });
+    expect(await addCardMember(7, 9, 5)).toEqual({ kind });
+    expect(await removeCardLabel(7, 9, 3)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getCard(7, 9)).toEqual({ kind: "network" });
+    expect(await patchCard(7, 9, { due_on: null })).toEqual({ kind: "network" });
+    expect(await getLabels()).toEqual({ kind: "network" });
   });
 });
 

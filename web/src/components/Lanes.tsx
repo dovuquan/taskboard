@@ -6,6 +6,8 @@ import {
   type CardError,
   type ListError,
   archiveList,
+  type Label,
+  copyCard,
   createCard,
   createList,
   getLists,
@@ -20,10 +22,11 @@ import {
   applyMoveResult,
   canAddCard,
   groupByList,
+  insertAfterCard,
   planCardDrop,
   ungroup,
 } from "../cards/logic";
-import { CARD_LIMIT_TEXT, cardFailureText } from "../cards/text";
+import { CARD_LIMIT_TEXT, cardFailureText, copiedText } from "../cards/text";
 import {
   archiveIn,
   arrange,
@@ -44,7 +47,8 @@ import {
   restoreFailureText,
   restoredText,
 } from "../lists/text";
-import { CardTile, Composer } from "./Cards";
+import { cardPath, navigate } from "../routes";
+import { type CardPerson, CardTile, Composer } from "./Cards";
 import { Icon } from "./Icon";
 
 /** What the lanes show and do. Every field is optional so a page can render them statically. */
@@ -58,6 +62,12 @@ export type LanesControls = {
   onOpenComposer: (listId: number) => void;
   onCloseComposer: () => void;
   onAddCard: (listId: number, title: string) => Promise<boolean>;
+  /** Opens the card dialog for the card with this key. */
+  onOpenCard: (key: string) => void;
+  /** Moves a card to the end of another list (the dialog's "Move to"). */
+  onMoveCardTo: (cardId: number, listId: number) => void;
+  /** Copies a card (the dialog's "Copy card"). */
+  onCopyCard: (cardId: number) => void;
   onCardDragStart: (id: number) => void;
   onCardDragEnd: () => void;
   onCardDragOver: (listId: number, index: number) => void;
@@ -215,12 +225,16 @@ export function LanesView({
   lists,
   editor,
   cards = {},
+  labels,
+  people,
   controls = {},
 }: {
   lists: BoardList[];
   editor: boolean;
   /** The cards of each list, from `groupByList`. */
   cards?: ByList;
+  labels?: Label[];
+  people?: CardPerson[];
   controls?: Partial<LanesControls>;
 }) {
   const c = controls;
@@ -335,9 +349,12 @@ export function LanesView({
                 {laneCards.map((card, i) => (
                   <CardTile
                     card={card}
+                    labels={labels}
+                    people={people}
                     editor={editor}
                     dragging={cardDragId === card.id}
                     dropBefore={slot === i}
+                    onOpen={c.onOpenCard}
                     onDragStart={c.onCardDragStart}
                     onDragEnd={c.onCardDragEnd}
                     key={card.id}
@@ -625,10 +642,37 @@ export function useLanes({
     }
   }
 
+  async function copyCardOf(id: number) {
+    if (cardBusy.current) return;
+    const total = ungroup(groupByList(current.current, cardsNow.current)).length;
+    if (!canAddCard(total)) {
+      notify(CARD_LIMIT_TEXT);
+      return;
+    }
+    cardBusy.current = true;
+    try {
+      const res = await track(copyCard(boardId, id));
+      if (res.kind !== "ok") {
+        failCard(res.kind, cardFailureText(res.kind, false));
+        return;
+      }
+      const made = res.data;
+      setCards((cs) => insertAfterCard(cs, id, made));
+      notify(copiedText(made.key));
+    } finally {
+      cardBusy.current = false;
+    }
+  }
+
   function dropCard(listId: number, index: number) {
     const id = cardDragId;
     endCardDrag();
     if (id === null) return;
+    moveCardTo(id, listId, index);
+  }
+
+  /** Moves a card before the card at `index` of a list (the list length means the end). */
+  function moveCardTo(id: number, listId: number, index: number) {
     const plan = planCardDrop(groupByList(current.current, cardsNow.current), id, listId, index);
     if (!plan) return;
     const key = cardsNow.current.find((c) => c.id === id)?.key ?? "";
@@ -661,6 +705,12 @@ export function useLanes({
     },
     onCloseComposer: () => setComposer(null),
     onAddCard: addCard,
+    onOpenCard: (key) => navigate(cardPath(boardId, key)),
+    onMoveCardTo: (cardId, listId) => {
+      const length = groupByList(current.current, cardsNow.current)[listId]?.length ?? 0;
+      moveCardTo(cardId, listId, length);
+    },
+    onCopyCard: (cardId) => void copyCardOf(cardId),
     onCardDragStart: (id) => {
       setCardDragId(id);
       setDragging(true);
