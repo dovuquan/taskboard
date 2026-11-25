@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
-export function Toast({ message, onUndo }: { message: string | null; onUndo?: (() => void) | null }) {
+type ToastProps = { message: string | null; onUndo?: (() => void) | null };
+
+/** The toast as plain markup. */
+export function ToastView({ message, onUndo }: ToastProps) {
   if (!message) return null;
   return (
     <div className="toast" role="status">
@@ -12,6 +16,16 @@ export function Toast({ message, onUndo }: { message: string | null; onUndo?: ((
       )}
     </div>
   );
+}
+
+/**
+ * The toast, placed on `document.body` outside `#root`. While a dialog is open `#root` is inert,
+ * and a toast inside it would be skipped by screen readers and its Undo could not be clicked.
+ */
+export function Toast(props: ToastProps) {
+  // There is no document when the markup is rendered on the server (the tests do that).
+  if (typeof document === "undefined") return <ToastView {...props} />;
+  return createPortal(<ToastView {...props} />, document.body);
 }
 
 type Shown = { text: string; id: number; undo: (() => void) | null };

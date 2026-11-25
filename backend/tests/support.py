@@ -17,6 +17,8 @@ from taskboard.models import (
     BoardList,
     BoardMember,
     Card,
+    CardLabel,
+    CardMember,
     Event,
     User,
     WorkspaceMember,
@@ -206,6 +208,36 @@ def add_cards(db_url, board_id, list_id, n):
         s.commit()
 
     query(db_url, add)
+
+
+def add_card_member(db_url, card_id, user_id):
+    """An assignment written directly (no event)."""
+
+    def add(s):
+        s.add(CardMember(card_id=card_id, user_id=user_id))
+        s.commit()
+
+    query(db_url, add)
+
+
+def add_card_label(db_url, card_id, label_id):
+    """A label put on a card directly (no event)."""
+
+    def add(s):
+        s.add(CardLabel(card_id=card_id, label_id=label_id))
+        s.commit()
+
+    query(db_url, add)
+
+
+def card_member_ids(db_url, card_id):
+    stmt = select(CardMember.user_id).where(CardMember.card_id == card_id)
+    return query(db_url, lambda s: sorted(s.scalars(stmt)))
+
+
+def card_label_ids(db_url, card_id):
+    stmt = select(CardLabel.label_id).where(CardLabel.card_id == card_id)
+    return query(db_url, lambda s: sorted(s.scalars(stmt)))
 
 
 def interfere(monkeypatch, action, module="boards"):

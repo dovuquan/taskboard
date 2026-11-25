@@ -7,6 +7,7 @@ export type Screen =
   | "boards"
   | "board"
   | "board-settings"
+  | "board-card"
   | "members"
   | "error";
 
@@ -15,17 +16,39 @@ export function needsMemberCount(screen: Screen): boolean {
   return screen === "boards";
 }
 
-const BOARD_PATH = /^\/boards\/([1-9]\d{0,14})(\/settings)?\/?$/;
+const BOARD_PATH = /^\/boards\/([1-9]\d{0,14})(\/settings|\/cards\/[^/]+)?\/?$/;
+const CARD_PATH = /^\/boards\/[1-9]\d{0,14}\/cards\/([^/]+)\/?$/;
 
-/** The board id in `/boards/7` or `/boards/7/settings`; null for anything else. */
+/** The board id in `/boards/7`, `/boards/7/settings` or `/boards/7/cards/TB-3`; null otherwise. */
 export function boardIdFromPath(path: string): number | null {
   const match = BOARD_PATH.exec(path);
   return match ? Number(match[1]) : null;
 }
 
+/**
+ * The card key in `/boards/7/cards/TB-3`: the one path segment after `cards`, decoded and kept
+ * whole (case and all), so a lookup by exact key can refuse `tb-3` or `TB-3abc`. Null for any
+ * other path.
+ */
+export function cardKeyFromPath(path: string): string | null {
+  const match = CARD_PATH.exec(path);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+/** The path of a card's dialog on its board. */
+export function cardPath(boardId: number, key: string): string {
+  return `/boards/${boardId}/cards/${encodeURIComponent(key)}`;
+}
+
 function signedInScreen(path: string): Screen {
   if (path === "/members") return "members";
   if (boardIdFromPath(path) !== null) {
+    if (cardKeyFromPath(path) !== null) return "board-card";
     return path.replace(/\/$/, "").endsWith("/settings") ? "board-settings" : "board";
   }
   return "boards";

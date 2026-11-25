@@ -1,6 +1,7 @@
 import threading
 
 import pytest
+from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
@@ -51,7 +52,12 @@ COLUMNS = {
         "created_at",
         "archived_at",
     },
+    "labels": {"id", "name", "color"},
+    "card_members": {"card_id", "user_id"},
+    "card_labels": {"card_id", "label_id"},
 }
+
+LABELS = ["Launch", "Bug", "Docs", "Ops", "Marketing", "Research", "Design"]
 
 
 def test_every_connection_gets_the_pragmas(db_url):
@@ -93,6 +99,54 @@ def test_migration_is_repeatable(db_url):
     engine.dispose()
     assert versions == [head]
     assert set(COLUMNS) <= set(inspect(create_engine(db_url)).get_table_names())
+
+
+def _labels(db_url):
+    engine = create_engine(db_url)
+    try:
+        with engine.connect() as conn:
+            return [tuple(r) for r in conn.execute(text("SELECT id, name, color FROM labels"))]
+    finally:
+        engine.dispose()
+
+
+def test_migration_seeds_the_seven_labels_once(db_url):
+    run_migrations(db_url)
+    run_migrations(db_url)
+
+    assert _labels(db_url) == [(i, n, n.lower()) for i, n in enumerate(LABELS, start=1)]
+
+
+def test_card_link_tables_have_composite_keys_foreign_keys_and_indexes(db_url):
+    run_migrations(db_url)
+
+    inspector = inspect(create_engine(db_url))
+    for table, key, other, target in (
+        ("card_members", ["card_id", "user_id"], "user_id", "users"),
+        ("card_labels", ["card_id", "label_id"], "label_id", "labels"),
+    ):
+        assert inspector.get_pk_constraint(table)["constrained_columns"] == key
+        targets = {fk["referred_table"] for fk in inspector.get_foreign_keys(table)}
+        assert targets == {"cards", target}
+        assert [other] in [i["column_names"] for i in inspector.get_indexes(table)]
+    unique = [tuple(i["column_names"]) for i in inspector.get_indexes("labels") if i["unique"]]
+    unique += [tuple(u["column_names"]) for u in inspector.get_unique_constraints("labels")]
+    assert ("name",) in unique
+
+
+def test_downgrade_removes_the_new_tables_and_upgrade_restores_them(db_url):
+    run_migrations(db_url)
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    config.set_main_option("sqlalchemy.url", db_url)
+
+    command.downgrade(config, "0004")
+    names = set(inspect(create_engine(db_url)).get_table_names())
+    assert not {"labels", "card_members", "card_labels"} & names
+    assert "cards" in names
+
+    command.upgrade(config, "head")
+    assert [name for _id, name, _c in _labels(db_url)] == LABELS
 
 
 def test_foreign_keys_are_enforced(db_url):

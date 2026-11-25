@@ -8,7 +8,13 @@ import { Expired } from "./pages/Expired";
 import { Members } from "./pages/Members";
 import { Refused } from "./pages/Refused";
 import { SignIn } from "./pages/SignIn";
-import { type Screen, boardIdFromPath, needsMemberCount, resolveScreen } from "./routes";
+import {
+  type Screen,
+  boardIdFromPath,
+  cardKeyFromPath,
+  needsMemberCount,
+  resolveScreen,
+} from "./routes";
 
 type AppViewProps = {
   screen: Screen;
@@ -17,6 +23,7 @@ type AppViewProps = {
   user: Me | null;
   memberCount: number | null;
   boardId?: number | null;
+  cardKey?: string | null;
   boardName?: string | null;
   onBoardName?: (name: string | null) => void;
 };
@@ -28,6 +35,7 @@ function barScreen(screen: Screen): "boards" | "members" | "board" | null {
       return screen;
     case "board":
     case "board-settings":
+    case "board-card":
       return "board";
     default:
       return null;
@@ -47,7 +55,16 @@ export function AppView(props: AppViewProps) {
   );
 }
 
-function Screen({ screen, domain, reason, memberCount, user, boardId, onBoardName }: AppViewProps) {
+function Screen({
+  screen,
+  domain,
+  reason,
+  memberCount,
+  user,
+  boardId,
+  cardKey,
+  onBoardName,
+}: AppViewProps) {
   switch (screen) {
     case "signin":
       return <SignIn domain={domain} />;
@@ -59,12 +76,15 @@ function Screen({ screen, domain, reason, memberCount, user, boardId, onBoardNam
       return user && <Boards me={user} domain={domain} memberCount={memberCount} />;
     case "board":
     case "board-settings":
+    case "board-card":
+      // The three share one element, so opening a card or the settings never remounts the board.
       return (
         user &&
         boardId != null && (
           <Board
             id={boardId}
             settings={screen === "board-settings"}
+            cardKey={screen === "board-card" ? (cardKey ?? null) : null}
             me={user}
             domain={domain}
             onBoardName={onBoardName}
@@ -152,6 +172,7 @@ export function App() {
       user={boot.user}
       memberCount={memberCount}
       boardId={boardIdFromPath(path)}
+      cardKey={cardKeyFromPath(path)}
       boardName={boardName}
       onBoardName={setBoardName}
     />

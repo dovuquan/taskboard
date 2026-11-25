@@ -270,10 +270,21 @@ type Props = {
   notify: (text: string) => void;
   onChanged: () => void;
   onGone: () => void;
+  /** The session ended (401): the page decides whether to reload, so typed text is not lost. */
+  onExpired: () => void;
   onClose: () => void;
 };
 
-export function BoardSettings({ board, me, domain, notify, onChanged, onGone, onClose }: Props) {
+export function BoardSettings({
+  board,
+  me,
+  domain,
+  notify,
+  onChanged,
+  onGone,
+  onExpired,
+  onClose,
+}: Props) {
   const id = board.id;
   const can = board.my_role === "owner";
   const [people, setPeople] = useState<BoardMember[]>([]);
@@ -291,7 +302,7 @@ export function BoardSettings({ board, me, domain, notify, onChanged, onGone, on
     void Promise.all([getBoardMembers(id), can ? getMembers() : Promise.resolve(null)]).then(
       ([list, all]) => {
         if (!live) return;
-        if (list.kind === "expired" || all?.kind === "expired") window.location.reload();
+        if (list.kind === "expired" || all?.kind === "expired") onExpired();
         else if (list.kind === "not_found") onGone();
         else if (list.kind !== "ok") setPeopleState("error");
         else {
@@ -329,7 +340,7 @@ export function BoardSettings({ board, me, domain, notify, onChanged, onGone, on
     }
     setName(board.name);
     const failure = describeFailure(res.kind);
-    if (failure.expired) window.location.reload();
+    if (failure.expired) onExpired();
     else if (failure.gone) onGone();
     else {
       notify(failure.message);

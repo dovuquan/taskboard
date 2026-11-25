@@ -3,17 +3,23 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import {
   type BoardDetail,
   type BoardList,
+  type BoardMember,
   type Card,
+  type Label,
   type Me,
   getBoard,
+  getBoardMembers,
   getCards,
+  getLabels,
   getLists,
 } from "../api";
-import { canAddCard, groupByList, shouldApply } from "../cards/logic";
+import { EXPIRED_KEPT_TEXT, canAddCard, expiredAction, groupByList, shouldApply, ungroup } from "../cards/logic";
 import { startBoardPoller } from "../cards/poller";
 import { CARD_LIMIT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
+import { CardDialog, useCardEditor } from "../components/CardDialog";
+import type { CardPerson } from "../components/Cards";
 import { Icon } from "../components/Icon";
 import { type LanesControls, LanesView, useLanes } from "../components/Lanes";
 import { Link } from "../components/Link";
@@ -28,25 +34,55 @@ type ViewProps = {
   state: State;
   board: BoardDetail | null;
   settings?: ReactNode;
+  /** The card dialog, when a card is open. */
+  dialog?: ReactNode;
   message?: string | null;
   onUndo?: (() => void) | null;
   lists?: BoardList[];
   cards?: Card[];
+  labels?: Label[];
+  people?: CardPerson[];
   lanes?: Partial<LanesControls>;
   onRetry?: () => void;
 };
 
 /** Everything one load of the board screen brings, or why it failed. */
 type Snapshot =
-  | { kind: "ok"; board: BoardDetail; lists: BoardList[]; cards: Card[] }
+  | {
+      kind: "ok";
+      board: BoardDetail;
+      lists: BoardList[];
+      cards: Card[];
+      labels: Label[];
+      people: BoardMember[];
+    }
   | { kind: "expired" | "not_found" | "network" | "server" };
 
 async function fetchSnapshot(id: number): Promise<Snapshot> {
-  const [board, lists, cards] = await Promise.all([getBoard(id), getLists(id), getCards(id)]);
-  if (board.kind === "ok" && lists.kind === "ok" && cards.kind === "ok") {
-    return { kind: "ok", board: board.data, lists: lists.data, cards: cards.data };
+  const [board, lists, cards, labels, people] = await Promise.all([
+    getBoard(id),
+    getLists(id),
+    getCards(id),
+    getLabels(),
+    getBoardMembers(id),
+  ]);
+  if (
+    board.kind === "ok" &&
+    lists.kind === "ok" &&
+    cards.kind === "ok" &&
+    labels.kind === "ok" &&
+    people.kind === "ok"
+  ) {
+    return {
+      kind: "ok",
+      board: board.data,
+      lists: lists.data,
+      cards: cards.data,
+      labels: labels.data,
+      people: people.data,
+    };
   }
-  const kinds: string[] = [board.kind, lists.kind, cards.kind];
+  const kinds: string[] = [board.kind, lists.kind, cards.kind, labels.kind, people.kind];
   if (kinds.includes("expired")) return { kind: "expired" };
   if (kinds.includes("not_found")) return { kind: "not_found" };
   return { kind: kinds.includes("network") ? "network" : "server" };
@@ -85,10 +121,13 @@ export function BoardView({
   state,
   board,
   settings,
+  dialog,
   message,
   onUndo,
   lists = [],
   cards = [],
+  labels = [],
+  people = [],
   lanes,
   onRetry,
 }: ViewProps) {
@@ -135,7 +174,14 @@ export function BoardView({
           )}
         </div>
         {lists.length > 0 ? (
-          <LanesView lists={lists} editor={editor} cards={byList} controls={lanes} />
+          <LanesView
+            lists={lists}
+            editor={editor}
+            cards={byList}
+            labels={labels}
+            people={people}
+            controls={lanes}
+          />
         ) : (
           <div className="page gutter">
             <div className="empty">
@@ -195,6 +241,7 @@ export function BoardView({
     <>
       {content}
       {settings}
+      {dialog}
       <Toast message={message ?? null} onUndo={onUndo} />
     </>
   );
@@ -205,12 +252,15 @@ type Loaded = { state: State; board: BoardDetail | null };
 export function Board({
   id,
   settings,
+  cardKey = null,
   me,
   domain,
   onBoardName,
 }: {
   id: number;
   settings: boolean;
+  /** The key of the card whose dialog is open (from the address), or null. */
+  cardKey?: string | null;
   me: Me;
   domain: string | null;
   onBoardName?: (name: string | null) => void;
@@ -220,6 +270,9 @@ export function Board({
   const [message, show, undo] = useToast();
   const [lists, setLists] = useState<BoardList[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
+  const [labels, setLabels] = useState<Label[]>([]);
+  const [people, setPeople] = useState<BoardMember[]>([]);
+  const [polled, setPolled] = useState(0);
 
   // A reload may replace the screen only if nothing local happened since it began: `epoch` counts
   // local changes, `pending` the saves in flight, `dragging` a drag under way.
@@ -229,21 +282,33 @@ export function Board({
   const ready = useRef(false);
   ready.current = load.state === "ready";
   const refreshRef = useRef<() => Promise<void>>(async () => {});
+  // Any description draft with unsaved text: a reload would destroy it.
+  const unsavedText = useRef(false);
+
+  /** The session ended: reload the page to sign in again, unless that would lose typed text. */
+  function expire() {
+    if (expiredAction(unsavedText.current) === "reload") window.location.reload();
+    else show(EXPIRED_KEPT_TEXT);
+  }
 
   useEffect(() => {
     let live = true;
     setLoad({ state: "loading", board: null });
     setLists([]);
     setCards([]);
+    setLabels([]);
+    setPeople([]);
     async function fetchAll() {
       const res = await fetchSnapshot(id);
       if (!live) return;
-      if (res.kind === "expired") window.location.reload();
+      if (res.kind === "expired") expire();
       else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
       else if (res.kind !== "ok") setLoad({ state: res.kind, board: null });
       else {
         setLists(res.lists);
         setCards(res.cards);
+        setLabels(res.labels);
+        setPeople(res.people);
         setLoad({ state: "ready", board: res.board });
       }
     }
@@ -259,7 +324,7 @@ export function Board({
     const poller = startBoardPoller<Extract<Snapshot, { kind: "ok" }>>({
       load: async () => {
         const res = await fetchSnapshot(id);
-        if (res.kind === "expired") window.location.reload();
+        if (res.kind === "expired") expire();
         else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
         else if (res.kind === "ok") return res;
         return null;
@@ -267,7 +332,11 @@ export function Board({
       onResult: (res) => {
         setLists(res.lists);
         setCards(res.cards);
+        setLabels(res.labels);
+        setPeople(res.people);
         setLoad({ state: "ready", board: res.board });
+        // The open card's description is fetched again once the new cards are on screen.
+        setPolled((n) => n + 1);
       },
       epoch: () => epoch.current,
       canApply: (start) => shouldApply(start, epoch.current, pending.current, dragging.current),
@@ -293,10 +362,21 @@ export function Board({
 
   /** Fetches the board again without the skeleton, after a change in the settings sheet. */
   async function reload() {
-    const res = await getBoard(id);
+    const start = epoch.current;
+    const [res, members, fresh] = await Promise.all([getBoard(id), getBoardMembers(id), getCards(id)]);
+    // Who can be put on a card follows the board's people, which the settings sheet changes, and
+    // taking someone off the board takes them off its cards too.
+    if (members.kind === "ok") setPeople(members.data);
+    const apply = shouldApply(start, epoch.current, pending.current, dragging.current);
+    // A poll that began before this must not bring the old board, people or cards back.
+    epoch.current += 1;
+    if (fresh.kind === "ok") {
+      if (apply) setCards(fresh.data);
+      else void refreshRef.current();
+    }
     if (res.kind === "ok") setLoad({ state: "ready", board: res.data });
     else if (res.kind === "not_found") setLoad({ state: "gone", board: null });
-    else if (res.kind === "expired") window.location.reload();
+    else if (res.kind === "expired") expire();
   }
 
   /** Runs a save: while it is out, and after it, an older reload is not allowed to win. */
@@ -309,6 +389,12 @@ export function Board({
     });
   }
 
+  /** A change of the cards made here: a reload that began before it must not overwrite it. */
+  const changeCards = (update: (cards: Card[]) => Card[]) => {
+    epoch.current += 1;
+    setCards(update);
+  };
+
   const lanes = useLanes({
     boardId: id,
     lists,
@@ -317,10 +403,7 @@ export function Board({
       setLists(update);
     },
     cards,
-    setCards: (update) => {
-      epoch.current += 1;
-      setCards(update);
-    },
+    setCards: changeCards,
     track,
     setDragging: (on) => {
       dragging.current = on;
@@ -329,7 +412,38 @@ export function Board({
     notify: show,
     onForbidden: () => void reload(),
     onGone: () => setLoad({ state: "gone", board: null }),
+    onExpired: expire,
   });
+
+  const cardEditor = useCardEditor({
+    boardId: id,
+    cardKey,
+    cards,
+    setCards: changeCards,
+    track,
+    notify: show,
+    refresh: () => refreshRef.current(),
+    onForbidden: () => void reload(),
+    onGone: () => setLoad({ state: "gone", board: null }),
+    onExpired: expire,
+    role: load.board?.my_role ?? null,
+    polled,
+  });
+  unsavedText.current = cardEditor.hasDirty;
+
+  const dialog =
+    cardKey !== null && load.state === "ready" && load.board ? (
+      <CardDialog
+        board={load.board}
+        lists={lists}
+        labels={labels}
+        people={people}
+        total={ungroup(groupByList(lists, cards)).length}
+        editor={cardEditor}
+        onMoveCardTo={lanes.onMoveCardTo}
+        onCopyCard={lanes.onCopyCard}
+      />
+    ) : null;
 
   const sheet =
     settings && load.state === "ready" && load.board ? (
@@ -340,6 +454,7 @@ export function Board({
         notify={show}
         onChanged={() => void reload()}
         onGone={() => setLoad({ state: "gone", board: null })}
+        onExpired={expire}
         onClose={() => navigate(`/boards/${id}`)}
       />
     ) : null;
@@ -349,10 +464,13 @@ export function Board({
       state={load.state}
       board={load.board}
       settings={sheet}
+      dialog={dialog}
       message={message}
       onUndo={undo}
       lists={lists}
       cards={cards}
+      labels={labels}
+      people={people}
       lanes={lanes}
       onRetry={() => setAttempt((n) => n + 1)}
     />
