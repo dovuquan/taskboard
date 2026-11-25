@@ -479,6 +479,78 @@ def test_a_bad_patch_is_refused_with_nothing_written(as_user, db_url, body):
     assert len(events(db_url)) == before
 
 
+def _error(type_, loc, msg):
+    return {"type": type_, "loc": ["body", *loc], "msg": msg}
+
+
+@pytest.mark.parametrize(
+    ("body", "errors"),
+    [
+        (
+            {},
+            [
+                _error(
+                    "value_error", [], "Value error, send exactly one of title, description, due_on"
+                )
+            ],
+        ),
+        (
+            {"title": None},
+            [_error("value_error", [], "Value error, title cannot be cleared")],
+        ),
+        (
+            {"title": ""},
+            [_error("string_too_short", ["title"], "String should have at least 1 character")],
+        ),
+        (
+            {"title": "x" * 201},
+            [_error("string_too_long", ["title"], "String should have at most 200 characters")],
+        ),
+        (
+            {"unknown": 1},
+            [_error("extra_forbidden", ["unknown"], "Extra inputs are not permitted")],
+        ),
+        (
+            {"description": 5},
+            [_error("string_type", ["description"], "Input should be a valid string")],
+        ),
+        (
+            {"description": "a" * 10_001},
+            [
+                _error(
+                    "value_error",
+                    ["description"],
+                    "Value error, text is longer than 10000 characters",
+                )
+            ],
+        ),
+        (
+            {"due_on": "2026-1-1"},
+            [_error("value_error", ["due_on"], "Value error, due_on must be a YYYY-MM-DD string")],
+        ),
+    ],
+    ids=lambda v: repr(v)[:40],
+)
+def test_a_422_names_the_type_the_place_and_the_message(as_user, db_url, body, errors):
+    w = world(as_user, db_url)
+
+    response = w["client"].patch(curl(w["board"], w["card"]), json=body)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": errors}
+
+
+def test_a_refused_description_is_not_echoed_in_the_422(as_user, db_url):
+    w = world(as_user, db_url)
+    secret = "TOPSECRETWORDS" * 800  # 11,200 characters: too long
+
+    response = w["client"].patch(curl(w["board"], w["card"]), json={"description": secret})
+
+    assert response.status_code == 422
+    assert "TOPSECRET" not in response.text
+    assert set(response.json()["detail"][0]) == {"type", "loc", "msg"}
+
+
 def test_a_description_with_a_lone_surrogate_is_refused(as_user, db_url):
     w = world(as_user, db_url)
     before = len(events(db_url))
@@ -969,6 +1041,92 @@ def test_a_card_hidden_mid_request_is_not_found_and_nothing_is_written(
     assert len(events(db_url)) == before
     assert snapshot_after_hide[5] == [w["boss"]] and snapshot_after_hide[6] == [1]
     assert snapshot_after_hide[0] == "A" and snapshot_after_hide[1] is None
+
+
+def _after_commit(monkeypatch, action):
+    """Run `action` (a direct database write) right after the request's transaction ends."""
+    from taskboard import card_fields
+
+    real = card_fields.record_change
+
+    def hooked(session, change, **kw):
+        try:
+            return real(session, change, **kw)
+        finally:
+            action()
+
+    monkeypatch.setattr(card_fields, "record_change", hooked)
+
+
+def _archive_card(db_url, card_id):
+    def hide():
+        def write(s):
+            s.execute(update(Card).where(Card.id == card_id).values(archived_at=_now()))
+            s.commit()
+
+        query(db_url, write)
+
+    return hide
+
+
+@pytest.mark.parametrize("action", list(WRITES))
+def test_the_answer_comes_from_the_same_transaction_as_the_write(
+    as_user, db_url, monkeypatch, action
+):
+    w = world(as_user, db_url)
+    add_card_label(db_url, w["card"], 1)
+    add_card_member(db_url, w["card"], w["boss"])
+    _after_commit(monkeypatch, _archive_card(db_url, w["card"]))
+
+    response = WRITES[action](w["client"], w["board"], w["card"], w)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == expected_detail(action, w)
+    assert card_row(db_url, w["card"]).archived_at is not None  # the hide really ran after
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c, url, w: c.patch(url, json={"title": "A"}),
+        lambda c, url, w: c.patch(url, json={"description": None}),
+        lambda c, url, w: c.patch(url, json={"due_on": None}),
+        lambda c, url, w: c.put(url + f"/labels/{w['label']}"),
+        lambda c, url, w: c.delete(url + f"/labels/{w['label'] + 1}"),
+        lambda c, url, w: c.put(url + f"/members/{w['boss']}"),
+        lambda c, url, w: c.delete(url + f"/members/{w['cy']}"),
+    ],
+    ids=["title", "description", "due", "label_add", "label_remove", "member_add", "member_remove"],
+)
+def test_a_no_op_answers_from_inside_its_transaction_too(as_user, db_url, monkeypatch, call):
+    w = world(as_user, db_url)
+    add_card_label(db_url, w["card"], 1)
+    add_card_member(db_url, w["card"], w["boss"])
+    _after_commit(monkeypatch, _archive_card(db_url, w["card"]))
+    before = len(events(db_url))
+
+    response = call(w["client"], curl(w["board"], w["card"]), {**w, "label": 1})
+
+    assert response.status_code == 200, response.text
+    assert response.json() == detail(
+        w["card"], "TB-1", w["list"], "A", label_ids=[1], member_ids=[w["boss"]]
+    )
+    assert len(events(db_url)) == before
+
+
+def test_a_saved_description_is_answered_even_if_the_card_is_archived_right_after(
+    as_user, db_url, monkeypatch
+):
+    w = world(as_user, db_url)
+    _after_commit(monkeypatch, _archive_card(db_url, w["card"]))
+
+    response = w["client"].patch(
+        curl(w["board"], w["card"]), json={"description": "Saved **body**"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["description"] == "Saved **body**"
+    assert card_row(db_url, w["card"]).description == "Saved **body**"
 
 
 @pytest.mark.parametrize("change", ["demoted", "removed"])

@@ -259,16 +259,26 @@ def _write(
     kind: str,
     apply: Callable[[Session, Card, dict[str, Any]], None],
 ) -> dict[str, Any]:
-    """Lock, re-check the actor, let `apply` write and fill the event data, answer the card."""
+    """Lock, re-check the actor, let `apply` write and fill the event data, answer the card.
+
+    The answer is read inside the same transaction, after `apply`, so it shows exactly what this
+    request saw and wrote even if the card is archived right after the commit.
+    """
     board_id, actor_id, prefix = ctx.board.id, ctx.user.id, ctx.board.key_prefix
     data: dict[str, Any] = {}  # filled inside the transaction; record_change reads it afterwards
+    answer: dict[str, Any] = {}
 
     def change(s: Session) -> None:
         _lock_visible_card(s, board_id, card_id)
         ensure_role(s, ctx.user, board_id, "member")
         card = s.get(Card, card_id)
         data["key"] = f"{prefix}-{card.number}"
-        apply(s, card, data)
+        try:
+            apply(s, card, data)
+        except _NoChange:
+            answer.update(card_detail(s, board_id, prefix, card_id))
+            raise  # still rolled back with no event; the answer was read under the same lock
+        answer.update(card_detail(s, board_id, prefix, card_id))
 
     try:
         record_change(
@@ -282,8 +292,8 @@ def _write(
             board_id=board_id,
         )
     except _NoChange:
-        pass  # rolled back, no event; answer with the current card
-    return card_detail(db, board_id, prefix, card_id)
+        pass  # rolled back, no event; `answer` holds the current card
+    return answer
 
 
 @router.patch("/api/boards/{board_id}/cards/{card_id}")

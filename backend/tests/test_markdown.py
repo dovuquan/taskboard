@@ -11,12 +11,19 @@ from taskboard.markdown import MAX_CHARS, clean_markdown
 TAG_LIKE = re.compile(r"<[A-Za-z/!?]")
 LINK_OPEN = re.compile(r"\]\(")
 HTTP = re.compile(r"https?://", re.IGNORECASE)
+# A reference definition as CommonMark reads it, also in quotes and list items (an independent
+# copy of the idea, not of the cleaner's pattern).
+DEFINITION = re.compile(
+    r"^[ \t>*+\-0-9.)]*\[(?:[^\[\]\\]|\\[\s\S])+\]:[ \t]*(?:\n[ \t>]*)?(\S+)", re.MULTILINE
+)
 
 
 def assert_invariants(out):
     assert not TAG_LIKE.search(out), out
     for match in LINK_OPEN.finditer(out):
         assert HTTP.match(out, match.end()), out
+    for match in DEFINITION.finditer(out):
+        assert HTTP.match(match[1]), out
 
 
 def clean(raw):
@@ -132,8 +139,15 @@ def test_autolinks_become_the_bare_address():
         ("<script>a</script>x<script>b</script>y", "xy"),
         ("<style>p{}</style>after", "after"),
         ("<script\n>alert(1)</script\n>after", "after"),
-        ("<script>never closed", None),
-        ("keep <script>never closed", "keep "),
+        ("<script>never closed", "never closed"),
+        ("keep <script>never closed", "keep never closed"),
+        ("<style>never closed", "never closed"),
+        (
+            "Put the <script> tag in the head.\nThen deploy.",
+            "Put the  tag in the head.\nThen deploy.",
+        ),
+        ("<script>a</script>b <script>c", "b c"),
+        ("<script>a<script>b</script>c", "c"),
         ("<<b>b>text", "text"),
     ],
 )
@@ -184,19 +198,38 @@ def test_a_leftover_open_bracket_gets_a_space():
         ("[a](&#x6A;avascript&colon;alert(1))", "a"),
         ("[a](java&Tab;script:alert(1))", "a"),
         ("[a](  javascript:alert(1))", "a"),
-        ("[a](/relative/path)", "a"),
-        ('[a](#anchor "title")', "a"),
-        ("[a]()", "a"),
         ("[a [b] c](javascript:x)", "a [b] c"),
+        ("[a\\]](javascript:x)", "a\\]"),
+        ("[a\\[b](javascript:x)", "a\\[b"),
+        ("[a](mailto:me@example.com)", "a"),
+        ("[a](tel:+123 'x')", "a"),
         ("[[a](javascript:x)](javascript:y)", "a"),
         ('[a](javascript:alert(1) "t")', "a"),
         ("[a](java<b>script:alert(1))", "a"),
-        ("[a](<javascript:alert(1)>)", "a"),
+        ("[a](<javascript:alert(1)>)", "[a] ()"),  # the tag-like address goes; `[a]()` is broken
         ("[a]( https://spaced.test)", "a"),
         ("[a](&#104;ttps://encoded.test)", "a"),
     ],
 )
 def test_only_http_destinations_survive_in_links_and_images(raw, expected):
+    assert clean(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("handlers[0](event)", "handlers[0] (event)"),
+        ("[a](/relative/path)", "[a] (/relative/path)"),
+        ('[a](#anchor "title")', '[a] (#anchor "title")'),
+        ("[a]()", "[a] ()"),
+        ("see [1](2) and [x](y z)", "see [1] (2) and [x] (y z)"),
+        ("a[i](j)[k](l)", "a[i] (j)[k] (l)"),
+        ("[a\\](x)", "[a\\] (x)"),
+        ("[a\\](javascript:x)", "[a\\] (javascript:x)"),
+        ("\\[a](x)", "\\[a] (x)"),
+    ],
+)
+def test_a_link_without_a_scheme_is_broken_and_nothing_is_lost(raw, expected):
     assert clean(raw) == expected
 
 
@@ -214,20 +247,44 @@ def test_a_link_that_cannot_be_read_gets_a_space_after_the_bracket():
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("[x]: javascript:alert(1)\n\n[click][x]", "\n\n[click][x]"),
-        ("[x]: JAVASCRIPT:alert(1)", ""),
-        ("> [x]: javascript:alert(1)\n\ntext", "> \n\ntext"),
-        ("- [x]: data:text/html,a\n- b", "- \n- b"),
-        ("1. [x]: javascript:a\nrest", "1. \nrest"),
-        ("[x]:\n  javascript:alert(1)\n[y]: https://ok.test", "\n[y]: https://ok.test"),
+        ("[x]: javascript:alert(1)\n\n[click][x]", "[x] : \n\n[click][x]"),
+        ("[x]: JAVASCRIPT:alert(1)", "[x] : "),
+        ("> [x]: javascript:alert(1)\n\ntext", "> [x] : \n\ntext"),
+        ("- [x]: data:text/html,a\n- b", "- [x] : \n- b"),
+        ("1. [x]: javascript:a\nrest", "1. [x] : \nrest"),
+        ("[x]:\n  javascript:alert(1)\n[y]: https://ok.test", "[x] :\n  \n[y]: https://ok.test"),
         ("[x]: <javascript:alert(1)>", "[x]: "),
-        ("[x]: < javascript:alert(1)>", ""),
+        ("[x]: < javascript:alert(1)>", "[x] : "),
+        ("[x]: &#106;avascript&colon;alert(1)", "[x] : "),
+        ('[x]: java&Tab;script:alert(1) "t"', '[x] :  "t"'),
+        ("[x]: &#104;ttps://encoded.test", "[x] : "),
         ('[x]: https://ok.test "title"', '[x]: https://ok.test "title"'),
         ("[x]: HTTP://ok.test", "[x]: HTTP://ok.test"),
     ],
 )
 def test_reference_definitions_keep_only_http_destinations(raw, expected):
-    assert clean(raw) == (expected or None)
+    assert clean(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("[TODO]: fix login", "[TODO] : fix login"),
+        ("[2026-11-01]: Release day", "[2026-11-01] : Release day"),
+        ("[Agenda]:\nBring the slides\nrest", "[Agenda] :\nBring the slides\nrest"),
+        ("[a]: Note: text", "[a] : Note: text"),
+        ("[a]: Note:text", "[a] : "),
+        ("> [Q]: why?\n- [A]: because", "> [Q] : why?\n- [A] : because"),
+        ("[x]:", "[x]:"),
+        ("[x]:\n\ntext", "[x]:\n\ntext"),
+        ("[a\\]]: javascript:alert(1)\n\n[a\\]]", "[a\\]] : \n\n[a\\]]"),
+        ("[a\\[b]: javascript:a", "[a\\[b] : "),
+        ("[a\\]]: text", "[a\\]] : text"),
+        ("[a\\]]: https://ok.test", "[a\\]]: https://ok.test"),
+    ],
+)
+def test_ordinary_text_after_a_label_is_kept_and_only_scheme_addresses_go(raw, expected):
+    assert clean(raw) == expected
 
 
 # ---- invariants over hostile text -------------------------------------------------
@@ -260,6 +317,15 @@ HOSTILE = [
     "[a](" + "a " * 4_990,
     "<" + " " * 9_998 + "<",
     "[" + " " * 9_998 + "]",
+    ("[a](" + " " * 3_320 + "z") * 3,
+    "[a](" + " " * 9_990,
+    "](a" * 3_333,
+    "\\[" * 5_000,
+    "\\]" * 5_000,
+    "[" + "a\\]" * 3_000,
+    "[a\\]]: x\n" * 1_111,
+    "<script>x" * 1_111,
+    "<style>x" * 1_111,
 ]
 
 
@@ -279,6 +345,38 @@ def test_hostile_input_is_cleaned_in_well_under_a_second(raw):
         again = time.perf_counter()
         assert clean_markdown(out) == out
         assert time.perf_counter() - again < 0.5
+
+
+def test_the_destination_pattern_grows_linearly_with_the_blanks():
+    from taskboard.markdown import _DEST
+
+    def cost(blanks):
+        text = " " * blanks + "z"
+        best = float("inf")
+        for _ in range(7):
+            started = time.perf_counter()
+            assert _DEST.match(text) is None
+            best = min(best, time.perf_counter() - started)
+        return best
+
+    small, large = cost(1_000), cost(4_000)
+
+    # four times the input: about 4x when linear, about 16x when quadratic
+    assert large < small * 9, (small, large)
+
+
+def test_the_hostile_blank_runs_are_cleaned_within_a_second_in_total():
+    inputs = [
+        ("[a](" + " " * 3_320 + "z") * 3,
+        "[a](" + " " * 9_990,
+        "[a](" + "\t" * 9_990,
+        ("[a](" + " " * 1_000 + "z)x") * 2 + "[a](" + " " * 3_000,
+    ]
+    started = time.perf_counter()
+    for raw in inputs:
+        for _ in range(3):
+            clean_markdown(raw)
+    assert time.perf_counter() - started < 1.0
 
 
 TOKENS = [

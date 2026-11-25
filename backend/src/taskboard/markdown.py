@@ -2,10 +2,19 @@
 
 The result is still Markdown source, never HTML. It never holds a tag-like `<x`, and every link,
 image or reference definition that keeps a destination points at `http://` or `https://`.
-Every pattern is linear-time (no nested quantifiers); the scans that could restart at each
-character are bounded or single-pass, so 10,000 hostile characters stay fast.
+What is lost: tag-like text, a script or style element with its content (only the tag itself when
+it never closes), and an address with a scheme other than http(s). Anything else that merely looks
+like a link or a definition is broken, not deleted: `x[0](y)` becomes `x[0] (y)` and
+`[TODO]: fix it` becomes `[TODO] : fix it`. After a label, a first word that is `word:` on its
+own (`[a]: Note: text`) is ordinary text; `word:rest` with no blank is read as an address.
+
+Every pattern is linear-time: no quantifier is nested inside another, the link-destination
+pattern is possessive (it never gives characters back), the definition label has a length limit,
+and the scans that could restart at each character are bounded or single-pass. So 10,000 hostile
+characters stay fast.
 """
 
+import html
 import re
 
 MAX_CHARS = 10_000
@@ -24,26 +33,34 @@ _CLOSERS = {
 _LEFTOVER_OPEN = re.compile(r"<(?=[A-Za-z/!?])")
 _HTTP = re.compile(r"https?://", re.IGNORECASE)
 _BAD_LINK_OPEN = re.compile(r"\]\((?!https?://)", re.IGNORECASE)
-_PLAIN = re.compile(r"[^\[\]]+")
+_PLAIN = re.compile(r"[^\[\]\\]+")
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:(?=\S)")  # `word:` and something after it
+_BLANKS = re.compile(r"[\s\x00-\x1f\x7f-\x9f]")
+_ANGLE = re.compile(r"<[^>]*>?")  # a `<...>` destination, which may hold blanks
+_WORD = re.compile(r"[^ \t]+")
+_SCHEME_SCAN = 1_024  # how much of a destination is decoded to look for its scheme
 
-# `](` + optional blanks + destination (one level of balanced parentheses) + optional title + `)`
+# `](` + optional blanks + destination (one level of balanced parentheses) + optional title + `)`.
+# Possessive (`*+`, `++`, `?+`): nothing is given back, so a failed match costs one pass, not
+# one pass per blank. No valid link changes: no choice inside it ever needed a second try.
 _DEST = re.compile(
     r"""
-    \s*
-    (?:[^\s()]|\([^\s()]*\))*
-    (?:\s+(?:"[^"]*"|'[^']*'|\([^()]*\)))?
-    \s*\)
+    \s*+
+    (?P<dest>(?:[^\s()]|\([^\s()]*+\))*+)
+    (?:\s++(?:"[^"]*+"|'[^']*+'|\([^()]*+\)))?+
+    \s*+\)
     """,
     re.VERBOSE,
 )
 # A reference definition, also inside quotes and list items: `[label]: destination ...`.
+# The label may hold escaped brackets (`\]`, `\[`); `rest` is what follows on the destination's
+# line (the destination, then an optional title), `gap` what lies between the colon and it.
 _DEFINITION = re.compile(
     r"""
     ^(?P<prefix>[ \t>*+\-]*(?:\d{1,9}[.)][ \t>*+\-]*)*)
-    \[[^\[\]]{1,999}\]:
-    [ \t]*(?:\n[ \t>]*)?
-    (?P<dest>\S+)
-    [^\n]*
+    (?P<label>\[(?:[^\[\]\\]|\\[\s\S]){1,999}\]):
+    (?P<gap>[ \t]*(?:\n[ \t>]*)?)
+    (?P<rest>[^\n]*)
     (?P<end>\n|\Z)
     """,
     re.VERBOSE | re.MULTILINE,
@@ -63,6 +80,7 @@ def _strip_tags(text: str) -> str:
     """
     out: list[str] = []
     opens: list[int] = []  # indexes in `out` of `<` tokens with no `<` or `>` after them
+    unclosed: set[str] = set()  # element names with no closing tag anywhere after this point
     pos = 0
     while pos < len(text):
         token = _TOKEN.match(text, pos)
@@ -79,23 +97,43 @@ def _strip_tags(text: str) -> str:
             del out[at:]
             opens.pop()
             name = _NAME.match(inner)
-            closer = _CLOSERS.get(name.group().lower()) if name else None
-            if closer is not None:
+            lowered = name.group().lower() if name else ""
+            closer = _CLOSERS.get(lowered)
+            if closer is not None and lowered not in unclosed:
                 found = closer.search(text, pos)
-                pos = found.end() if found else len(text)
+                if found:
+                    pos = found.end()  # a closed element goes with its content
+                else:
+                    unclosed.add(lowered)  # only the tag goes; asking again would find nothing
         else:
             out.append(piece)
             opens.clear()  # no earlier `<` can reach a later `>` across this one
     return "".join(out)
 
 
+def _has_scheme(address: str) -> bool:
+    """Does the address start with `word:` and more, once entities are decoded and blanks gone?
+
+    Only called when the address is not literally `http(s)://`, so a scheme here is another one
+    (or an encoded http, which is not trusted either).
+    """
+    decoded = _BLANKS.sub("", html.unescape(address[:_SCHEME_SCAN])).lstrip("<")
+    return _SCHEME.match(decoded) is not None
+
+
 def _strip_links(text: str) -> str:
     """Keep only http(s) destinations in links, images and reference definitions."""
 
     def definition(match: re.Match[str]) -> str:
-        if _HTTP.match(match["dest"]):
+        rest = match["rest"]
+        if not rest or _HTTP.match(rest):
             return match[0]
-        return match["prefix"] + match["end"]
+        word = (_ANGLE if rest.startswith("<") else _WORD).match(rest)
+        assert word is not None  # `rest` is not empty and holds no newline
+        if _has_scheme(word.group()):
+            rest = rest[word.end() :]  # the address goes, whatever follows it stays
+        # `[x]:` -> `[x] :`: no longer a definition, so no destination can be read from it
+        return f"{match['prefix']}{match['label']} :{match['gap']}{rest}{match['end']}"
 
     text = _DEFINITION.sub(definition, text)
     out: list[str] = []
@@ -107,6 +145,9 @@ def _strip_links(text: str) -> str:
             opens.append(len(out))
             out.append(char)
             pos += 1
+        elif char == "\\":  # an escaped character is never a bracket
+            out.append(text[pos : pos + 2])
+            pos += 2
         elif char != "]":
             plain = _PLAIN.match(text, pos)
             assert plain is not None
@@ -121,16 +162,18 @@ def _strip_links(text: str) -> str:
                     opens.pop()
                 continue
             cut = _DEST.match(text, start, min(size, start + _DEST_SCAN))
-            if cut is not None and opens:
+            if cut is not None and opens and _has_scheme(cut["dest"][:_SCHEME_SCAN]):
                 at = opens.pop()
                 inner = out[at + 1 :]
                 del out[at:]
-                if out and out[-1].endswith("!"):  # an image: its `!` goes with it
+                if out and out[-1].endswith("!") and out[-1] != "\\!":  # an image: `!` goes too
                     out[-1] = out[-1][:-1]
                 out.extend(inner)
                 pos = cut.end()
             else:
-                out.append("] (")  # unreadable or unmatched: it can no longer open a link
+                # unreadable, unmatched or without a scheme (`x[0](y)`): it can no longer open a
+                # link, and nothing is lost
+                out.append("] (")
                 pos = start
                 if opens:
                     opens.pop()
