@@ -409,6 +409,8 @@ type Setup = {
   onForbidden: () => void;
   /** The server said the board is gone. */
   onGone: () => void;
+  /** The session ended (401): the page decides whether to reload, so typed text is not lost. */
+  onExpired: () => void;
 };
 
 const SEED = ["To do", "Doing", "Done"];
@@ -426,6 +428,7 @@ export function useLanes({
   notify,
   onForbidden,
   onGone,
+  onExpired,
 }: Setup): LanesControls {
   const [composer, setComposer] = useState<number | null>(null);
   const [cardDragId, setCardDragId] = useState<number | null>(null);
@@ -471,7 +474,7 @@ export function useLanes({
 
   /** What every failed call does besides telling the person. */
   function react(kind: ListError) {
-    if (kind === "expired") window.location.reload();
+    if (kind === "expired") onExpired();
     else if (kind === "forbidden") onForbidden();
     else if (kind === "not_found") onGone();
     else if (kind === "conflict" || kind === "list_not_found") void reloadLists();
@@ -611,7 +614,7 @@ export function useLanes({
   /** What every failed card call does besides telling the person. */
   function failCard(kind: CardError, text: string) {
     if (kind !== "not_found" && kind !== "expired") notify(text);
-    if (kind === "expired") window.location.reload();
+    if (kind === "expired") onExpired();
     else if (kind === "forbidden") onForbidden();
     else if (kind === "not_found") onGone();
     else if (kind === "conflict" || kind === "card_not_found" || kind === "list_not_found") {

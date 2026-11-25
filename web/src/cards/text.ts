@@ -54,10 +54,6 @@ export const LINK_FAILED_TEXT = "Couldn't copy the link. Copy it from the addres
 export const DRAFT_OPEN_TEXT = "You have an unsaved description. Save or cancel it first.";
 export const DRAFT_KEPT_TEXT = "Your unsaved description is kept. Open the card to carry on.";
 
-/** An ended session does not reload the page while a description has unsaved text. */
-export const EXPIRED_DRAFT_TEXT =
-  "Your session has ended. Your unsaved description is still in its box; copy it, then reload the page and sign in again.";
-
 /** Shown above a description that someone who can no longer edit still has open. */
 export const DRAFT_READONLY_TEXT =
   "You can no longer change this card. Your unsaved description is shown read-only: copy it, or discard it.";

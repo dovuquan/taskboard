@@ -47,7 +47,10 @@ import {
   keepForcedGone,
   keptOnLeave,
   matchPeople,
+  type Tiles,
+  lastTileOf,
   readField,
+  rememberTile,
   sameField,
   shouldRefetchDetail,
   showPeopleSearch,
@@ -844,8 +847,9 @@ export function useCardEditor({
   polled,
 }: Setup): CardEditor {
   const found = cardKey ? findByKey(cards, cardKey) : null;
-  const lastTile = useRef<Card | null>(null);
-  if (found) lastTile.current = found;
+  // The last tile of every card seen, so each draft finds its own card again.
+  const tiles = useRef<Tiles>({});
+  tiles.current = rememberTile(tiles.current, found);
   // One draft per card, so what is typed on one card is never lost by working on another.
   const [drafts, dispatch] = useReducer(draftsReducer, {});
   const [saving, setSaving] = useState(false);
@@ -858,7 +862,7 @@ export function useCardEditor({
   const { tile: shown, stale } = dialogCard({
     cardKey,
     found,
-    last: lastTile.current,
+    last: lastTileOf(tiles.current, cardKey),
     draft: cardKey ? draftForKey(drafts, cardKey) : undefined,
     forcedGone,
   });
@@ -966,6 +970,8 @@ export function useCardEditor({
 
   /** Changes a field of card `id` on screen at once, then saves it, one save at a time per field. */
   function setField(id: number, field: CardField) {
+    // Silent: a field that unmounts after the person became an observer must not send anything.
+    if (!canEditNow.current) return;
     const card = cardsNow.current.find((c) => c.id === id);
     if (!card) return;
     const before = readField(card, field);
@@ -1003,7 +1009,10 @@ export function useCardEditor({
       setSaving(false);
       if (res.kind === "ok") {
         version.current += 1;
-        setLoaded({ id: d.id, state: "ready", description: res.data.description });
+        // Another card may be on screen by now (Back, open B): its detail must not be replaced.
+        if (shownNow.current?.id === d.id) {
+          setLoaded({ id: d.id, state: "ready", description: res.data.description });
+        }
         dispatch({ type: "drop", id: d.id });
         setCards((cs) =>
           cs.map((c) => (c.id === d.id ? { ...c, has_description: res.data.has_description } : c)),

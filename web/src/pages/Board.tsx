@@ -13,9 +13,9 @@ import {
   getLabels,
   getLists,
 } from "../api";
-import { canAddCard, expiredAction, groupByList, shouldApply, ungroup } from "../cards/logic";
+import { EXPIRED_KEPT_TEXT, canAddCard, expiredAction, groupByList, shouldApply, ungroup } from "../cards/logic";
 import { startBoardPoller } from "../cards/poller";
-import { CARD_LIMIT_TEXT, EXPIRED_DRAFT_TEXT } from "../cards/text";
+import { CARD_LIMIT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
 import { BoardSettings } from "../components/BoardSettings";
 import { CardDialog, useCardEditor } from "../components/CardDialog";
@@ -288,7 +288,7 @@ export function Board({
   /** The session ended: reload the page to sign in again, unless that would lose typed text. */
   function expire() {
     if (expiredAction(unsavedText.current) === "reload") window.location.reload();
-    else show(EXPIRED_DRAFT_TEXT);
+    else show(EXPIRED_KEPT_TEXT);
   }
 
   useEffect(() => {
@@ -412,6 +412,7 @@ export function Board({
     notify: show,
     onForbidden: () => void reload(),
     onGone: () => setLoad({ state: "gone", board: null }),
+    onExpired: expire,
   });
 
   const cardEditor = useCardEditor({
@@ -453,6 +454,7 @@ export function Board({
         notify={show}
         onChanged={() => void reload()}
         onGone={() => setLoad({ state: "gone", board: null })}
+        onExpired={expire}
         onClose={() => navigate(`/boards/${id}`)}
       />
     ) : null;

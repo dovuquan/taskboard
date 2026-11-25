@@ -6,6 +6,9 @@ import {
   type ByList,
   DESCRIPTION_LIMIT,
   type DraftEntry,
+  EXPIRED_KEPT_TEXT,
+  lastTileOf,
+  rememberTile,
   acceptDetail,
   anyDirty,
   assignablePeople,
@@ -516,6 +519,25 @@ describe("save tracker", () => {
     });
   });
 
+  it("does not say 'undone' when the screen already shows the confirmed value", () => {
+    const t = createSaveTracker();
+    const key = "5:label:1";
+    t.request(key, label(false), label(true));
+    t.request(key, label(true), label(false));
+    expect(t.settle(key, { ok: false })).toEqual({ screen: { kind: "keep" }, next: null });
+    // The chain is over: the next change starts a new one.
+    expect(t.request(key, label(false), label(true))).toEqual(label(true));
+  });
+
+  it("still says 'undone' when the newest waiting value differs from the confirmed one", () => {
+    const t = createSaveTracker();
+    const key = "5:label:1";
+    t.request(key, label(false), label(true));
+    t.request(key, label(true), label(false));
+    t.request(key, label(false), label(true));
+    expect(t.settle(key, { ok: false }).screen).toEqual({ kind: "revert", value: label(false) });
+  });
+
   it("says keep, and sends nothing, for an answer nobody is waiting for", () => {
     const t = createSaveTracker();
     expect(t.settle("9:title", { ok: false })).toEqual({ screen: { kind: "keep" }, next: null });
@@ -616,6 +638,13 @@ describe("description drafts", () => {
     expect(expiredAction(anyDirty({ 1: entry(1, "a", "a") }))).toBe("reload");
     expect(expiredAction(anyDirty({ 2: entry(2, "typed", null) }))).toBe("keep");
   });
+
+  it("words the toast so it is true with the dialog closed", () => {
+    expect(EXPIRED_KEPT_TEXT).toContain("kept in memory");
+    expect(EXPIRED_KEPT_TEXT).toContain("open its card");
+    expect(EXPIRED_KEPT_TEXT).toContain("reload the page");
+    expect(EXPIRED_KEPT_TEXT).not.toContain("in its box");
+  });
 });
 
 describe("which card the dialog shows", () => {
@@ -656,6 +685,27 @@ describe("which card the dialog shows", () => {
       tile: null,
       stale: false,
     });
+  });
+
+  it("keeps one tile per card, so each draft finds its own card again", () => {
+    const a = full(3);
+    const b = full(4);
+    const tiles = rememberTile(rememberTile({}, a), b);
+    // Draft on A, Back, open B, A is archived, back to A's address: A's own tile, not B's.
+    expect(lastTileOf(tiles, "TB-3")).toBe(a);
+    expect(dialogCard({ cardKey: "TB-3", found: null, last: lastTileOf(tiles, "TB-3"), draft, forcedGone: null })).toEqual({
+      tile: a,
+      stale: true,
+    });
+    expect(lastTileOf(tiles, "TB-9")).toBeNull();
+    expect(lastTileOf(tiles, null)).toBeNull();
+  });
+
+  it("keeps the same tiles object when nothing is new", () => {
+    const a = full(3);
+    const tiles = rememberTile({}, a);
+    expect(rememberTile(tiles, a)).toBe(tiles);
+    expect(rememberTile(tiles, null)).toBe(tiles);
   });
 
   it("ignores a 'gone' mark that belongs to another key", () => {

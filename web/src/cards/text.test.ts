@@ -6,7 +6,6 @@ import {
   DRAFT_KEPT_TEXT,
   DRAFT_OPEN_TEXT,
   DRAFT_READONLY_TEXT,
-  EXPIRED_DRAFT_TEXT,
   LINK_COPIED_TEXT,
   LINK_FAILED_TEXT,
   cardFailureText,
@@ -87,9 +86,7 @@ describe("card dialog texts", () => {
     expect(DRAFT_KEPT_TEXT).toBe("Your unsaved description is kept. Open the card to carry on.");
   });
 
-  it("keeps the text when the session ends or the right to edit goes", () => {
-    expect(EXPIRED_DRAFT_TEXT).toContain("still in its box");
-    expect(EXPIRED_DRAFT_TEXT).toContain("reload the page");
+  it("keeps the text when the right to edit goes", () => {
     expect(DRAFT_READONLY_TEXT).toBe(
       "You can no longer change this card. Your unsaved description is shown read-only: copy it, or discard it.",
     );

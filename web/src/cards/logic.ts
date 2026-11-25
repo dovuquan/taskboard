@@ -266,7 +266,8 @@ export type SaveStep = { screen: Settled; next: CardField | null };
  * failure takes the field back to the last value the server confirmed and drops what waited.
  */
 export function createSaveTracker() {
-  type Slot = { confirmed: CardField; waiting: CardField | null };
+  // `shown` is the newest value the screen was given for the field.
+  type Slot = { confirmed: CardField; waiting: CardField | null; shown: CardField };
   const slots = new Map<string, Slot>();
   return {
     /**
@@ -276,10 +277,11 @@ export function createSaveTracker() {
     request(key: string, before: CardField, value: CardField): CardField | null {
       const slot = slots.get(key);
       if (!slot) {
-        slots.set(key, { confirmed: before, waiting: null });
+        slots.set(key, { confirmed: before, waiting: null, shown: value });
         return value;
       }
       slot.waiting = value;
+      slot.shown = value;
       return null;
     },
     /** The answer of the save that is out for `key`. */
@@ -288,6 +290,9 @@ export function createSaveTracker() {
       if (!slot) return { screen: { kind: "keep" }, next: null };
       if (!outcome.ok) {
         slots.delete(key);
+        // The screen may already show the confirmed value (on, off while the first was out):
+        // then nothing was undone, and nothing is said.
+        if (sameField(slot.shown, slot.confirmed)) return { screen: { kind: "keep" }, next: null };
         return { screen: { kind: "revert", value: slot.confirmed }, next: null };
       }
       slot.confirmed = outcome.value;
@@ -426,6 +431,24 @@ export function closeAction(canEdit: boolean, entry: DraftEntry | undefined): "c
 export function expiredAction(unsavedText: boolean): "reload" | "keep" {
   return unsavedText ? "keep" : "reload";
 }
+
+/** The last tile seen for each card key, so a draft's card keeps its own tile. */
+export type Tiles = Record<string, Card>;
+
+/** Remembers the tile of the card that is on the board (the same object when nothing is new). */
+export function rememberTile(tiles: Tiles, found: Card | null): Tiles {
+  if (!found || tiles[found.key] === found) return tiles;
+  return { ...tiles, [found.key]: found };
+}
+
+/** The remembered tile of this key, or null. */
+export function lastTileOf(tiles: Tiles, cardKey: string | null): Card | null {
+  return cardKey === null ? null : (tiles[cardKey] ?? null);
+}
+
+/** The toast for an ended session while unsaved text is held; true whether or not a dialog is open. */
+export const EXPIRED_KEPT_TEXT =
+  "Your session has ended. Your unsaved description is kept in memory: open its card, copy the text, then reload the page and sign in again.";
 
 /**
  * The card the dialog shows. A card that is on the board is shown; one that left the board stays
