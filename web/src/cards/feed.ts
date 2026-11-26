@@ -81,6 +81,18 @@ export function canChangeComment(editableUntil: string | null, now: number): boo
   return !Number.isNaN(until) && until > now;
 }
 
+/** Ctrl+Enter or Cmd+Enter in a comment box posts or saves it. */
+export function isSubmitKey(e: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
+  return (e.metaKey || e.ctrlKey) && e.key === "Enter";
+}
+
+/** Puts a removed entry back at its old place (or the end if the list is now shorter). Once only. */
+export function withEntryAt<T extends { type: string; id: number }>(entries: T[], entry: T, index: number): T[] {
+  if (entries.some((x) => x.type === entry.type && x.id === entry.id)) return entries;
+  const at = Math.max(0, Math.min(index, entries.length));
+  return [...entries.slice(0, at), entry, ...entries.slice(at)];
+}
+
 /** The first four entries, or all of them. */
 export function shownEntries<T>(entries: T[], all: boolean): T[] {
   return all ? entries : entries.slice(0, FEED_FIRST);

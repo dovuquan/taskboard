@@ -7,8 +7,10 @@ import {
   activityText,
   canChangeComment,
   commentUnsent,
+  isSubmitKey,
   shownEntries,
   whenText,
+  withEntryAt,
 } from "./feed";
 
 const ctx = {
@@ -156,5 +158,36 @@ describe("commentUnsent", () => {
 
   it("is false for an open edit nobody changed", () => {
     expect(commentUnsent("", { text: "first", original: "first" })).toBe(false);
+  });
+});
+
+describe("isSubmitKey", () => {
+  const key = (k: string, meta: boolean, ctrl: boolean) => ({ key: k, metaKey: meta, ctrlKey: ctrl });
+  it("is Ctrl+Enter or Cmd+Enter", () => {
+    expect(isSubmitKey(key("Enter", false, true))).toBe(true);
+    expect(isSubmitKey(key("Enter", true, false))).toBe(true);
+  });
+  it("is not a plain Enter or another key with a modifier", () => {
+    expect(isSubmitKey(key("Enter", false, false))).toBe(false);
+    expect(isSubmitKey(key("a", false, true))).toBe(false);
+  });
+});
+
+describe("withEntryAt", () => {
+  const list = [
+    { type: "comment", id: 1 },
+    { type: "event", id: 1 },
+    { type: "comment", id: 2 },
+  ];
+  it("puts a removed comment back at its old place", () => {
+    const gone = list.filter((x) => !(x.type === "comment" && x.id === 1));
+    expect(withEntryAt(gone, list[0], 0)).toEqual(list);
+  });
+  it("does not duplicate an entry that is already there, and treats an event with the same id as another entry", () => {
+    expect(withEntryAt(list, list[2], 2)).toBe(list);
+    expect(withEntryAt([list[1]], list[0], 0)).toEqual([list[0], list[1]]);
+  });
+  it("goes to the end when the list got shorter", () => {
+    expect(withEntryAt([list[1]], list[2], 9)).toEqual([list[1], list[2]]);
   });
 });

@@ -9,7 +9,10 @@ import {
   listView,
   progress,
   progressText,
+  settleDelete,
+  settleToggle,
   withDone,
+  withItemAt,
   withoutItem,
 } from "./checklist";
 
@@ -103,5 +106,34 @@ describe("changing the items", () => {
 
   it("removes one item", () => {
     expect(withoutItem(items([false, true, false]), 2).map((i) => i.id)).toEqual([1, 3]);
+  });
+
+  it("puts an item back at its old place, once, or at the end if the list got shorter", () => {
+    const all = items([false, true, false]);
+    const gone = withoutItem(all, 2);
+    expect(withItemAt(gone, all[1], 1)).toEqual(all);
+    expect(withItemAt(all, all[1], 1)).toBe(all);
+    expect(withItemAt(gone, all[1], 9).map((i) => i.id)).toEqual([1, 3, 2]);
+  });
+});
+
+describe("settling a save", () => {
+  it("keeps a check the server took", () => {
+    const checked = withDone(items([false, false]), 1, true);
+    expect(settleToggle(checked, 1, false, true)).toBe(checked);
+  });
+
+  it("puts a check the server refused back", () => {
+    const checked = withDone(items([false, false]), 1, true);
+    expect(settleToggle(checked, 1, false, false).map((i) => i.done)).toEqual([false, false]);
+    const unchecked = withDone(items([true, true]), 2, false);
+    expect(settleToggle(unchecked, 2, true, false).map((i) => i.done)).toEqual([true, true]);
+  });
+
+  it("puts a refused delete back where it was, and leaves a gone item gone", () => {
+    const all = items([false, true, false]);
+    const gone = withoutItem(all, 2);
+    expect(settleDelete(gone, all[1], 1, true)).toEqual(all);
+    expect(settleDelete(gone, all[1], 1, false)).toBe(gone);
   });
 });

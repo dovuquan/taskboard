@@ -102,6 +102,42 @@ export function checklistFailureText(kind: CardError, undone = false): string {
   }
 }
 
+export type Deletable = "item" | "comment";
+
+/** The toast for a failed delete: the thing was put back on screen (or is already gone). */
+export function deleteFailureText(kind: CardError, what: Deletable): string {
+  const noun = what === "item" ? "checklist item" : "comment";
+  switch (kind) {
+    case "network":
+      return `Can't reach Taskboard. The ${noun} was not deleted; it is back.`;
+    case "expired":
+      return `Your session has ended. The ${noun} was not deleted; it is back. Sign in again.`;
+    case "forbidden":
+    case "edit_window_closed":
+    case "item_not_found":
+    case "comment_not_found":
+      return what === "item" ? checklistFailureText(kind) : commentFailureText(kind);
+    default:
+      return `That did not go through. The ${noun} was not deleted; it is back.`;
+  }
+}
+
+/**
+ * What a finished delete means for the screen. The Undo toast is offered only when the server
+ * confirmed (`ok`); on any failure the thing goes back, except when the server says it is already
+ * gone, where the refetch shows the truth.
+ */
+export function deleteOutcome(
+  kind: "ok" | CardError,
+  what: Deletable,
+): { putBack: boolean; offerUndo: boolean; text: string } {
+  if (kind === "ok") {
+    return { putBack: false, offerUndo: true, text: what === "item" ? ITEM_DELETED_TEXT : COMMENT_DELETED_TEXT };
+  }
+  const gone = kind === "item_not_found" || kind === "comment_not_found";
+  return { putBack: !gone, offerUndo: false, text: deleteFailureText(kind, what) };
+}
+
 /** The toast for a failed comment change; typed text stays in its box. */
 export function commentFailureText(kind: CardError): string {
   switch (kind) {

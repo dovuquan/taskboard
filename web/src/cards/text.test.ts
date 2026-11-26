@@ -11,6 +11,8 @@ import {
   cardFailureText,
   cardMovedText,
   copiedText,
+  deleteFailureText,
+  deleteOutcome,
   descriptionFailureText,
   movedCardText,
 } from "./text";
@@ -104,5 +106,36 @@ describe("card dialog texts", () => {
     ["server", "That did not go through. Your description was not saved; the text is still here."],
   ] as [CardError, string][])("words a failed description save for %s", (kind, text) => {
     expect(descriptionFailureText(kind)).toBe(text);
+  });
+});
+
+describe("delete toasts and outcome", () => {
+  it("offers Undo only when the server confirmed, and puts nothing back then", () => {
+    expect(deleteOutcome("ok", "item")).toEqual({ putBack: false, offerUndo: true, text: "Checklist item deleted" });
+    expect(deleteOutcome("ok", "comment")).toEqual({ putBack: false, offerUndo: true, text: "Comment deleted" });
+  });
+
+  it("offers no Undo and puts the thing back when the delete failed", () => {
+    for (const kind of ["network", "expired", "forbidden", "conflict", "edit_window_closed"] as CardError[]) {
+      const out = deleteOutcome(kind, "comment");
+      expect(out.offerUndo).toBe(false);
+      expect(out.putBack).toBe(true);
+    }
+    expect(deleteOutcome("network", "item")).toMatchObject({ putBack: true, offerUndo: false });
+  });
+
+  it("does not put back what the server says is already gone", () => {
+    expect(deleteOutcome("item_not_found", "item").putBack).toBe(false);
+    expect(deleteOutcome("comment_not_found", "comment").putBack).toBe(false);
+  });
+
+  it("words a failed delete as a delete, never as an unsent comment", () => {
+    expect(deleteFailureText("network", "comment")).toBe("Can't reach Taskboard. The comment was not deleted; it is back.");
+    expect(deleteFailureText("network", "item")).toBe("Can't reach Taskboard. The checklist item was not deleted; it is back.");
+    expect(deleteFailureText("expired", "comment")).toContain("not deleted");
+    expect(deleteFailureText("server" as CardError, "item")).toContain("not deleted");
+    for (const kind of ["network", "expired", "forbidden", "edit_window_closed", "comment_not_found"] as CardError[]) {
+      expect(deleteFailureText(kind, "comment")).not.toContain("text is still here");
+    }
   });
 });

@@ -17,15 +17,12 @@ import {
   activityText,
   canChangeComment,
   commentUnsent,
+  isSubmitKey,
   shownEntries,
   whenText,
+  withEntryAt,
 } from "../cards/feed";
-import {
-  COMMENT_DELETED_TEXT,
-  COMMENT_UPDATED_TEXT,
-  UNDO_FAILED_TEXT,
-  commentFailureText,
-} from "../cards/text";
+import { COMMENT_UPDATED_TEXT, UNDO_FAILED_TEXT, commentFailureText, deleteOutcome } from "../cards/text";
 import { CardAvatar, GlyphIcon, LinkedText } from "./Cards";
 
 /** The feed as the dialog knows it: loading, loaded or failed to load. */
@@ -110,7 +107,7 @@ function CommentRow({
               value={editing.text}
               onChange={(e) => c.onEditText?.(e.target.value)}
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                if (isSubmitKey(e)) {
                   e.preventDefault();
                   c.onEditSave?.();
                 }
@@ -223,7 +220,7 @@ export function CardFeedView({ feed, editor, now, lists, people, ui = {}, c = {}
             value={ui.text ?? ""}
             onChange={(e) => c.onText?.(e.target.value)}
             onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              if (isSubmitKey(e)) {
                 e.preventDefault();
                 c.onPost?.();
               }
@@ -292,6 +289,10 @@ export function useCardFeed(env: FeedEnv) {
   const savingNow = useRef(false);
   /** Only the newest request may land. */
   const request = useRef(0);
+  /** Comment deletes and edits that are out; a quiet fetch must not land while one is. */
+  const writesOut = useRef(0);
+  const loadedNow = useRef(loaded);
+  loadedNow.current = loaded;
   const openId = env.openId;
 
   function load(card: number, quiet: boolean) {
@@ -299,6 +300,7 @@ export function useCardFeed(env: FeedEnv) {
     if (!quiet) setLoaded({ id: card, state: "loading", entries: [], more: false });
     void getFeed(now.current.boardId, card).then((res) => {
       if (mine !== request.current) return;
+      if (quiet && writesOut.current > 0) return;
       if (res.kind === "ok") {
         setLoaded({ id: card, state: "ready", entries: res.data.entries, more: res.data.more });
       } else if (res.kind === "expired") {
@@ -366,8 +368,11 @@ export function useCardFeed(env: FeedEnv) {
       return;
     }
     savingNow.current = true;
+    writesOut.current += 1;
+    request.current += 1;
     setSaving(true);
     const res = await e.track(editComment(e.boardId, card, open.id, next));
+    writesOut.current -= 1;
     savingNow.current = false;
     setSaving(false);
     if (res.kind === "ok") {
@@ -401,14 +406,25 @@ export function useCardFeed(env: FeedEnv) {
     const card = e.openId;
     if (card === null || !e.canEdit()) return;
     if (editNow.current?.id === id) setEdit(null);
+    const index = loadedNow.current.entries.findIndex((x) => x.type === "comment" && x.id === id);
+    const removed = loadedNow.current.entries[index];
+    // A fetch that began before this delete must not bring the comment back.
+    request.current += 1;
+    writesOut.current += 1;
     setLoaded((l) => ({ ...l, entries: l.entries.filter((x) => !(x.type === "comment" && x.id === id)) }));
     void e.track(deleteComment(e.boardId, card, id)).then((res) => {
+      writesOut.current -= 1;
+      const outcome = deleteOutcome(res.kind, "comment");
       if (res.kind === "ok") {
         bumpCount(card, -1);
         // Undo is offered only now: the server has the delete.
-        e.notify(COMMENT_DELETED_TEXT, () => undoDelete(card, id));
+        e.notify(outcome.text, () => undoDelete(card, id));
       } else {
-        e.fail(res.kind, commentFailureText(res.kind));
+        // Put the comment back at once; the refetch then shows what the server really has.
+        if (outcome.putBack && removed) {
+          setLoaded((l) => (l.id === card ? { ...l, entries: withEntryAt(l.entries, removed, index) } : l));
+        }
+        e.fail(res.kind, outcome.text);
       }
       reload(card);
     });

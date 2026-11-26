@@ -62,3 +62,25 @@ export function withDone(items: ChecklistItem[], id: number, done: boolean): Che
 export function withoutItem(items: ChecklistItem[], id: number): ChecklistItem[] {
   return items.filter((i) => i.id !== id);
 }
+
+/** Puts a removed item back at its old place (or the end if the list is now shorter). Once only. */
+export function withItemAt(items: ChecklistItem[], item: ChecklistItem, index: number): ChecklistItem[] {
+  if (items.some((i) => i.id === item.id)) return items;
+  const at = Math.max(0, Math.min(index, items.length));
+  return [...items.slice(0, at), item, ...items.slice(at)];
+}
+
+/** The items after a check's save answered: kept when the server took it, taken back when not. */
+export function settleToggle(items: ChecklistItem[], id: number, wasDone: boolean, ok: boolean): ChecklistItem[] {
+  return ok ? items : withDone(items, id, wasDone);
+}
+
+/** The items after a delete's save answered: a refused delete puts the item back where it was. */
+export function settleDelete(
+  items: ChecklistItem[],
+  removed: ChecklistItem,
+  index: number,
+  putBack: boolean,
+): ChecklistItem[] {
+  return putBack ? withItemAt(items, removed, index) : items;
+}

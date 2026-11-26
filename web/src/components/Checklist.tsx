@@ -15,10 +15,12 @@ import {
   listView,
   progress,
   progressText,
+  settleDelete,
+  settleToggle,
   withDone,
   withoutItem,
 } from "../cards/checklist";
-import { ITEM_DELETED_TEXT, UNDO_FAILED_TEXT, checklistFailureText } from "../cards/text";
+import { UNDO_FAILED_TEXT, checklistFailureText, deleteOutcome } from "../cards/text";
 import { GlyphIcon, LinkedText } from "./Cards";
 import { Icon } from "./Icon";
 
@@ -285,7 +287,7 @@ export function useChecklist(env: ChecklistEnv) {
         finished(card);
         return;
       }
-      e.update(card, (items) => withDone(items, id, before.done));
+      e.update(card, (items) => settleToggle(items, id, before.done, false));
       e.fail(res.kind, checklistFailureText(res.kind, true));
       if (res.kind === "item_not_found") e.reloadDetail(card);
       finished(card);
@@ -334,18 +336,24 @@ export function useChecklist(env: ChecklistEnv) {
   function remove(id: number) {
     const e = now.current;
     const card = e.openId;
-    if (card === null || !e.canEdit() || !e.items().some((i) => i.id === id)) return;
+    if (card === null || !e.canEdit()) return;
+    const index = e.items().findIndex((i) => i.id === id);
+    if (index < 0) return;
+    const removed = e.items()[index];
     e.writes.current += 1;
     e.update(card, (items) => withoutItem(items, id));
     void e.track(deleteChecklistItem(e.boardId, card, id)).then((res) => {
       e.writes.current -= 1;
+      const outcome = deleteOutcome(res.kind, "item");
       if (res.kind === "ok") {
         landed(res.data);
         e.written(card);
         // Undo is offered only now: the server has the delete.
-        e.notify(ITEM_DELETED_TEXT, () => undoDelete(card, id));
+        e.notify(outcome.text, () => undoDelete(card, id));
       } else {
-        e.fail(res.kind, checklistFailureText(res.kind, true));
+        // Put the item back at once; the refetch then shows what the server really has.
+        e.update(card, (items) => settleDelete(items, removed, index, outcome.putBack));
+        e.fail(res.kind, outcome.text);
         e.reloadDetail(card);
       }
       finished(card);
