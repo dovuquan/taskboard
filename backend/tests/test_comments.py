@@ -252,6 +252,51 @@ def test_bad_comment_text_is_refused_and_writes_nothing(as_user, db_url, body):
     assert comment_events(db_url) == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pay ‮erutangis‬ now",  # right-to-left override
+        "a⁦b⁩",  # isolates
+        "a‎b",  # left-to-right mark
+        "a‏b",  # right-to-left mark
+        "hel​lo",  # zero-width space inside text
+        "hel‍lo",  # zero-width joiner
+        "hel﻿o",  # byte order mark
+        "a b",  # line separator
+        "aㅤb",  # blank-looking letter
+    ],
+)
+def test_comment_text_with_hidden_characters_is_refused_on_post_and_edit(as_user, db_url, text):
+    w = card_world(as_user, db_url)
+    url = curl(w["board"], w["card"], "comments")
+    existing = add_comment(db_url, w["card"], w["ada"], "Fine")
+
+    posted = w["client"].post(url, json={"text": text})
+    edited = w["client"].patch(f"{url}/{existing}", json={"text": text})
+
+    assert posted.status_code == 422
+    assert edited.status_code == 422
+    assert text not in posted.text and text not in edited.text
+    assert [r[2] for r in state(db_url, w["card"])] == ["Fine"]
+    assert comment_events(db_url) == []
+
+
+def test_ordinary_international_text_and_emoji_are_accepted(as_user, db_url):
+    w = card_world(as_user, db_url)
+    url = curl(w["board"], w["card"], "comments")
+    texts = [
+        "Xin chào, tôi đã hoàn thành việc này rồi",
+        "Café résumé naïve señor Zoë",
+        "Thumbs up \U0001f44d and a party \U0001f389\nsecond line\twith a tab",
+        "日本語のコメント",
+    ]
+
+    for text in texts:
+        response = w["client"].post(url, json={"text": text})
+        assert response.status_code == 201, text
+        assert response.json()["text"] == text
+
+
 def test_comment_text_with_a_lone_surrogate_is_refused_without_echo(as_user, db_url):
     w = card_world(as_user, db_url)
 
@@ -386,6 +431,8 @@ def test_the_24_hour_edge_is_exact(as_user, db_url, monkeypatch):
     assert at_edge_edit.status_code == 403
     assert at_edge_edit.json() == {"detail": "edit_window_closed"}
     assert at_edge_delete.status_code == 403
+    assert at_edge_delete.json() == {"detail": "edit_window_closed"}
+    assert row_of(db_url, second).deleted_at is None
     assert row_of(db_url, second).text == "Edge"
     assert len(comment_events(db_url)) == 1
 

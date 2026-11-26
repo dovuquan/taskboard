@@ -8,9 +8,9 @@ one `events` row with the change; the event never carries the comment text. A wr
 nothing answers 200 and records nothing.
 
 Comment text is stored as typed. It is not run through the Markdown cleaner, which would delete
-harmless text that only looks like a tag. The server refuses lone surrogates and control characters
-other than newline and tab, turns CRLF into LF and trims the ends; the web app shows it as plain
-text.
+harmless text that only looks like a tag. The server refuses what titles refuse (control, bidi and
+zero-width format characters, separators, private-use, surrogate and unassigned characters) except
+newline and tab, turns CRLF into LF and trims the ends; the web app shows it as plain text.
 """
 
 import unicodedata
@@ -29,6 +29,7 @@ from taskboard.boards import (
     _BLANKS,
     BoardCtx,
     _iso,
+    _no_invisible,
     ensure_role,
     require_board_role,
 )
@@ -80,10 +81,9 @@ def _clean_comment(text: str) -> str:
     text = text.replace("\r\n", "\n").strip()
     if not 1 <= len(text) <= _TEXT_MAX:
         raise ValueError(f"text must be 1 to {_TEXT_MAX} characters")
-    for ch in text:
-        category = unicodedata.category(ch)
-        if category == "Cs" or (category == "Cc" and ch not in "\n\t"):
-            raise ValueError("text must not contain control characters")
+    # The same refusals as titles and names (control, format such as bidi and zero-width, separator,
+    # private-use, surrogate, unassigned, blank-looking), except that newline and tab stay.
+    _no_invisible(text.replace("\n", "").replace("\t", ""))
     if not any(
         unicodedata.category(ch) not in _BAD_CATEGORIES and ch not in _BLANKS and not ch.isspace()
         for ch in text
