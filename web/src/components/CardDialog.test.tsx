@@ -1,3 +1,4 @@
+import { isValidElement, type ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
@@ -420,6 +421,40 @@ describe("CardDialogView checklist and comments", () => {
   };
   const NOW = Date.parse("2026-11-20T12:00:00Z");
   const withExtras = { detail: { state: "ready" as const, description: null, checklist }, feed, now: NOW };
+
+  // React only warns about two siblings sharing a key in the browser reconciler, never in
+  // renderToString, so walk the element tree the view returns and compare sibling keys.
+  const duplicateKeys = (node: ReactNode, path = "root"): string[] => {
+    if (Array.isArray(node)) {
+      const seen = new Set<string>();
+      const found: string[] = [];
+      node.forEach((child, i) => {
+        if (isValidElement(child) && child.key !== null) {
+          if (seen.has(child.key)) found.push(`${path}: duplicate key ${child.key}`);
+          seen.add(child.key);
+        }
+        found.push(...duplicateKeys(child, `${path}[${i}]`));
+      });
+      return found;
+    }
+    if (isValidElement<{ children?: ReactNode }>(node)) {
+      return duplicateKeys(node.props.children, `${path}>${String(node.key ?? "")}`);
+    }
+    return [];
+  };
+
+  it.each(["owner", "observer"] as const)("gives its keyed siblings distinct keys for a %s", (role) => {
+    const props: Props = {
+      board: { name: "Office move", my_role: role },
+      tile: tile(),
+      lists,
+      labels,
+      people: [person(1, "owner", "Ann Lee")],
+      total: 4,
+      ...withExtras,
+    };
+    expect(duplicateKeys(CardDialogView(props))).toEqual([]);
+  });
 
   it("has two columns: the card on the left, comments and activity on the right", () => {
     const { html, text } = render(withExtras);

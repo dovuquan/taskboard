@@ -711,7 +711,7 @@ export function CardDialogView({
           )}
           {editor ? (
             <TitleField
-              key={tile.id}
+              key={`title-${tile.id}`}
               title={tile.title}
               popOpen={pop !== null}
               onCommit={(title) => c.onTitle?.(title, tile.id)}
@@ -796,7 +796,7 @@ export function CardDialogView({
           <Description editor={editor} detail={detail} draft={draft} saving={ui.saving ?? false} c={c} />
           {detail.state === "ready" ? (
             <Checklist
-              key={tile.id}
+              key={`checklist-${tile.id}`}
               items={detail.checklist ?? []}
               editor={editor}
               busyIds={checklist.busyIds ?? []}
