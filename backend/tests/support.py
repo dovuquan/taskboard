@@ -19,6 +19,8 @@ from taskboard.models import (
     Card,
     CardLabel,
     CardMember,
+    ChecklistItem,
+    Comment,
     Event,
     User,
     WorkspaceMember,
@@ -238,6 +240,162 @@ def card_member_ids(db_url, card_id):
 def card_label_ids(db_url, card_id):
     stmt = select(CardLabel.label_id).where(CardLabel.card_id == card_id)
     return query(db_url, lambda s: sorted(s.scalars(stmt)))
+
+
+def add_checklist_item(
+    db_url, card_id, text, *, done=False, deleted_at=None, deleted_by=None, created_by=None
+):
+    """A checklist item written directly (no event); returns its id."""
+
+    def add(s):
+        row = ChecklistItem(
+            card_id=card_id,
+            text=text,
+            done=done,
+            created_by=created_by or s.scalar(select(User.id).order_by(User.id)),
+            deleted_at=deleted_at,
+            deleted_by=deleted_by,
+        )
+        s.add(row)
+        s.commit()
+        return row.id
+
+    return query(db_url, add)
+
+
+def checklist_rows(db_url, card_id):
+    """Every item of the card, deleted ones too, as plain tuples in id order."""
+    stmt = (
+        select(
+            ChecklistItem.id,
+            ChecklistItem.text,
+            ChecklistItem.done,
+            ChecklistItem.deleted_at,
+            ChecklistItem.deleted_by,
+        )
+        .where(ChecklistItem.card_id == card_id)
+        .order_by(ChecklistItem.id)
+    )
+    return query(db_url, lambda s: [tuple(r) for r in s.execute(stmt)])
+
+
+def add_comment(
+    db_url,
+    card_id,
+    author_id,
+    text,
+    *,
+    created_at=None,
+    edited_at=None,
+    deleted_at=None,
+    deleted_by=None,
+):
+    """A comment written directly (no event); returns its id."""
+
+    def add(s):
+        row = Comment(
+            card_id=card_id,
+            author_id=author_id,
+            text=text,
+            edited_at=edited_at,
+            deleted_at=deleted_at,
+            deleted_by=deleted_by,
+        )
+        if created_at is not None:
+            row.created_at = created_at
+        s.add(row)
+        s.commit()
+        return row.id
+
+    return query(db_url, add)
+
+
+def comment_rows(db_url, card_id):
+    """Every comment of the card, deleted ones too, as plain tuples in id order."""
+    stmt = (
+        select(
+            Comment.id,
+            Comment.author_id,
+            Comment.text,
+            Comment.created_at,
+            Comment.edited_at,
+            Comment.deleted_at,
+            Comment.deleted_by,
+        )
+        .where(Comment.card_id == card_id)
+        .order_by(Comment.id)
+    )
+    return query(db_url, lambda s: [tuple(r) for r in s.execute(stmt)])
+
+
+def add_checklist_items(db_url, card_id, n, *, deleted=0):
+    """`n` live checklist items and `deleted` deleted ones, bulk-inserted."""
+
+    def add(s):
+        user = s.scalar(select(User.id).order_by(User.id))
+        now = datetime.now(UTC).replace(tzinfo=None)
+        rows = [
+            {
+                "card_id": card_id,
+                "text": f"Item {i}",
+                "done": False,
+                "created_by": user,
+                "created_at": now,
+                "deleted_at": now if i >= n else None,
+                "deleted_by": user if i >= n else None,
+            }
+            for i in range(n + deleted)
+        ]
+        s.execute(insert(ChecklistItem), rows)
+        s.commit()
+
+    query(db_url, add)
+
+
+def add_comments(db_url, card_id, author_id, n):
+    """`n` live comments by one author, bulk-inserted."""
+
+    def add(s):
+        now = datetime.now(UTC).replace(tzinfo=None)
+        rows = [
+            {"card_id": card_id, "author_id": author_id, "text": f"Note {i}", "created_at": now}
+            for i in range(n)
+        ]
+        s.execute(insert(Comment), rows)
+        s.commit()
+
+    query(db_url, add)
+
+
+def curl(board_id, card_id, *rest):
+    """The URL of a card (or of something under it)."""
+    return "/".join(["/api/boards", str(board_id), "cards", str(card_id), *map(str, rest)])
+
+
+def card_world(as_user, db_url, role="member", visibility="workspace"):
+    """The actor (ada, with board role `role`), a board with one list and card TB-1, two teammates.
+
+    Returns a dict: client, ada, boss (owner), cy (member), board, list, card.
+    """
+    client = as_user("ada@example.com", "sub-ada")
+    ada = user_by_email(db_url, "ada@example.com").id
+    boss = add_user(db_url, "boss@example.com")
+    cy = add_user(db_url, "cy@example.com")
+    members = {boss: "owner", cy: "member"}
+    if role:
+        members[ada] = role
+    board_id = add_board(db_url, boss, "B", visibility, members)
+    list_id = add_list(db_url, board_id, "L", 1.0)
+    card_id = add_card(db_url, board_id, list_id, "A", 1.0)
+    return {
+        "client": client,
+        "ada": ada,
+        "boss": boss,
+        "cy": cy,
+        "board": board_id,
+        "list": list_id,
+        "card": card_id,
+    }
 
 
 def interfere(monkeypatch, action, module="boards"):

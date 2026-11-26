@@ -75,6 +75,9 @@ TILE_KEYS = {
     "member_ids",
     "due_on",
     "has_description",
+    "checklist_done",
+    "checklist_total",
+    "comment_count",
 }
 
 
@@ -89,6 +92,9 @@ def tile(card_id, key, list_id, title, **extra):
         "member_ids": [],
         "due_on": None,
         "has_description": False,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
         **extra,
     }
 

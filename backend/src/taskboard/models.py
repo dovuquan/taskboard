@@ -4,14 +4,17 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -69,6 +72,7 @@ class AuthEvent(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (Index("ix_events_subject", "subject_type", "subject_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -168,3 +172,34 @@ class CardLabel(Base):
 
     card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), primary_key=True)
     label_id: Mapped[int] = mapped_column(ForeignKey("labels.id"), primary_key=True, index=True)
+
+
+class ChecklistItem(Base):
+    """One line of a card's checklist; read in id order, so a restored item keeps its place."""
+
+    __tablename__ = "checklist_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), index=True)
+    text: Mapped[str] = mapped_column(String(200))
+    done: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # A deleted item stays as a row so Undo can bring it back; clients never see it again.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class Comment(Base):
+    """A comment on a card; its author may change or delete it for 24 hours."""
+
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
