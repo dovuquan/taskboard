@@ -18,6 +18,7 @@ import {
   type CardDetail,
   type CardError,
   type CardsResult,
+  type ChecklistItem,
   type Label,
   addCardLabel,
   addCardMember,
@@ -34,7 +35,7 @@ import {
   anyDirty,
   assignablePeople,
   canAddCard,
-  closeAction,
+  closeBlocker,
   createSaveTracker,
   descriptionToSend,
   dialogCard,
@@ -58,7 +59,9 @@ import {
   titleFrom,
   withField,
 } from "../cards/logic";
+import { countsOf } from "../cards/checklist";
 import {
+  COMMENT_OPEN_TEXT,
   DRAFT_KEPT_TEXT,
   DRAFT_OPEN_TEXT,
   DRAFT_READONLY_TEXT,
@@ -68,7 +71,15 @@ import {
   descriptionFailureText,
 } from "../cards/text";
 import { cardPath, navigate } from "../routes";
+import {
+  type CommentUi,
+  CardFeedView,
+  type FeedControls,
+  type FeedState,
+  useCardFeed,
+} from "./CardFeed";
 import { CardAvatar, LabelChip } from "./Cards";
+import { Checklist, useChecklist } from "./Checklist";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -78,6 +89,17 @@ export type Pop = "members" | "labels" | "menu" | null;
 export type DetailView = {
   state: "loading" | "ready" | "error";
   description: string | null;
+  checklist?: ChecklistItem[];
+};
+
+/** What the checklist block needs from the dialog: its saves and which of them are out. */
+export type ChecklistProps = {
+  busyIds: number[];
+  adding: boolean;
+  onToggle: (id: number, done: boolean) => void;
+  onDelete: (id: number) => void;
+  /** Resolves true when the item was added. */
+  onAdd: (text: string) => Promise<boolean>;
 };
 
 /** What the dialog is showing right now besides the card itself. */
@@ -125,6 +147,13 @@ type ViewProps = {
   detail: DetailView;
   ui?: Partial<DialogUi>;
   c?: Partial<DialogControls>;
+  checklist?: Partial<ChecklistProps>;
+  /** The card's comments and activity. */
+  feed?: FeedState;
+  feedUi?: Partial<CommentUi>;
+  feedC?: Partial<FeedControls>;
+  /** The time the comments are measured against, in milliseconds; now unless a test says. */
+  now?: number;
   frameRef?: Ref<HTMLDivElement>;
 };
 
@@ -590,6 +619,11 @@ export function CardDialogView({
   detail,
   ui = {},
   c = {},
+  checklist = {},
+  feed = { state: "loading", entries: [], more: false },
+  feedUi,
+  feedC,
+  now = Date.now(),
   frameRef,
 }: ViewProps) {
   const editor = board.my_role !== "observer";
@@ -607,7 +641,7 @@ export function CardDialogView({
         >
           <div className="empty plain">
             <h2 id="gone-title">This card isn't on the board</h2>
-            <p>It may have been archived or moved to another board.</p>
+            <p>It may have been archived or moved to another board. Its comments and checklist are kept.</p>
             <button className="btn" type="button" onClick={() => c.onClose?.()}>
               Back to the board
             </button>
@@ -662,6 +696,7 @@ export function CardDialogView({
             <Icon name="x" />
           </button>
         </div>
+        <div className="modal-cols">
         <div className="modal-body">
           {ui.stale && (
             <div className="banner warn">
@@ -759,6 +794,34 @@ export function CardDialogView({
             </div>
           </div>
           <Description editor={editor} detail={detail} draft={draft} saving={ui.saving ?? false} c={c} />
+          {detail.state === "ready" ? (
+            <Checklist
+              key={tile.id}
+              items={detail.checklist ?? []}
+              editor={editor}
+              busyIds={checklist.busyIds ?? []}
+              adding={checklist.adding ?? false}
+              onToggle={(id, done) => checklist.onToggle?.(id, done)}
+              onDelete={(id) => checklist.onDelete?.(id)}
+              onAdd={(text) => checklist.onAdd?.(text) ?? Promise.resolve(false)}
+            />
+          ) : detail.state === "loading" ? (
+            <div className="skel-list" aria-busy="true">
+              <div className="skel"></div>
+            </div>
+          ) : null}
+        </div>
+        <section className="modal-side">
+          <CardFeedView
+            feed={feed}
+            editor={editor}
+            now={now}
+            lists={lists}
+            people={people}
+            ui={feedUi}
+            c={feedC}
+          />
+        </section>
         </div>
       </div>
     </Scrim>
@@ -773,7 +836,7 @@ type Setup = {
   setCards: (update: (cards: Card[]) => Card[]) => void;
   /** Wraps a save so a reload that finishes meanwhile does not overwrite its result. */
   track: <T>(save: Promise<T>) => Promise<T>;
-  notify: (text: string) => void;
+  notify: (text: string, undo?: () => void) => void;
   /** Loads the board, lists and cards again. */
   refresh: () => Promise<void>;
   onForbidden: () => void;
@@ -786,7 +849,12 @@ type Setup = {
   polled: number;
 };
 
-type Loaded = { id: number | null; state: DetailView["state"]; description: string | null };
+type Loaded = {
+  id: number | null;
+  state: DetailView["state"];
+  description: string | null;
+  checklist: ChecklistItem[];
+};
 
 export type CardEditor = {
   /** The card the dialog shows; null when it is not on the board. */
@@ -801,6 +869,12 @@ export type CardEditor = {
   /** Any card has a description draft with unsaved text. */
   hasDirty: boolean;
   saving: boolean;
+  /** The checklist's saves and which of them are out. */
+  checklist: ChecklistProps;
+  /** The card's comments and activity, and the saves behind the comment box. */
+  feed: FeedState;
+  feedUi: CommentUi;
+  feedControls: FeedControls;
   /** Changes one field of the card `cardId` (not necessarily the one on screen any more). */
   setField: (cardId: number, field: CardField) => void;
   startEdit: () => void;
@@ -854,7 +928,12 @@ export function useCardEditor({
   const [drafts, dispatch] = useReducer(draftsReducer, {});
   const [saving, setSaving] = useState(false);
   const [forcedGone, setForcedGone] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState<Loaded>({ id: null, state: "loading", description: null });
+  const [loaded, setLoaded] = useState<Loaded>({
+    id: null,
+    state: "loading",
+    description: null,
+    checklist: [],
+  });
   const [attempt, setAttempt] = useState(0);
   const canEdit = role !== "observer";
 
@@ -906,18 +985,89 @@ export function useCardEditor({
     react(kind);
   }
 
+  /** Saves of the checklist that are still out: a poll must not replace the items meanwhile. */
+  const writes = useRef(0);
+
+  /** Puts the server's card on screen: items and description if it is the one shown, and the tile's counts. */
+  function acceptServer(d: CardDetail) {
+    version.current += 1;
+    if (shownNow.current?.id === d.id) {
+      setLoaded({ id: d.id, state: "ready", description: d.description, checklist: d.checklist });
+    }
+    setCards((cs) =>
+      cs.map((c) =>
+        c.id === d.id
+          ? {
+              ...c,
+              checklist_done: d.checklist_done,
+              checklist_total: d.checklist_total,
+              comment_count: d.comment_count,
+            }
+          : c,
+      ),
+    );
+  }
+
+  /** Fetches card `id` again without the placeholder, for after a save the server did not take. */
+  function reloadDetail(id: number) {
+    void getCard(boardId, id).then((res) => {
+      if (res.kind === "expired") onExpired();
+      else if (res.kind === "ok" && writes.current === 0) acceptServer(res.data);
+    });
+  }
+
+  const feedState = useCardFeed({
+    boardId,
+    openId,
+    canEdit: () => canEditNow.current,
+    polled,
+    setCards,
+    track,
+    notify,
+    fail,
+  });
+  const unsentNow = useRef(false);
+  unsentNow.current = feedState.unsent;
+
+  const checklist = useChecklist({
+    boardId,
+    openId,
+    canEdit: () => canEditNow.current,
+    items: () => detailNow.current.checklist,
+    update: (id, change) => {
+      const cur = detailNow.current;
+      if (cur.id !== id) return;
+      const next = change(cur.checklist);
+      detailNow.current = { ...cur, checklist: next };
+      setLoaded((l) => (l.id === id ? { ...l, checklist: next } : l));
+      setCards((cs) => cs.map((c) => (c.id === id ? { ...c, ...countsOf(next) } : c)));
+    },
+    accept: acceptServer,
+    reloadDetail,
+    written: feedState.reload,
+    writes,
+    track,
+    notify,
+    fail,
+  });
+
   // Load the open card's detail (the description) when a card opens.
   useEffect(() => {
     if (openId === null) return;
     let live = true;
-    setLoaded({ id: openId, state: "loading", description: null });
+    setLoaded({ id: openId, state: "loading", description: null, checklist: [] });
     void getCard(boardId, openId).then((res) => {
       if (!live) return;
       if (res.kind === "ok") {
-        setLoaded({ id: openId, state: "ready", description: res.data.description });
+        setLoaded({
+          id: openId,
+          state: "ready",
+          description: res.data.description,
+          checklist: res.data.checklist,
+        });
         return;
       }
-      setLoaded({ id: openId, state: "error", description: null });
+      setLoaded({ id: openId, state: "error", description: null, checklist: [] });
       if (res.kind !== "network" && res.kind !== "server" && res.kind !== "invalid") react(res.kind);
     });
     return () => {
@@ -931,6 +1081,7 @@ export function useCardEditor({
     const current = shownNow.current;
     if (
       !current ||
+      writes.current > 0 ||
       !shouldRefetchDetail({ open: true, draft: draftNow.current !== undefined, saving: savingNow.current })
     ) {
       return;
@@ -949,7 +1100,14 @@ export function useCardEditor({
         startVersion,
         version: version.current,
       });
-      if (accepted) setLoaded({ id: current.id, state: "ready", description: res.data.description });
+      if (accepted && writes.current === 0) {
+        setLoaded({
+          id: current.id,
+          state: "ready",
+          description: res.data.description,
+          checklist: res.data.checklist,
+        });
+      }
     });
   }, [polled]);
 
@@ -992,7 +1150,11 @@ export function useCardEditor({
       );
       if (step.screen.kind !== "keep") put(step.screen.value);
       if (step.next !== null) sendNext(id, key, step.next);
-      if (res.kind === "ok") return;
+      if (res.kind === "ok") {
+        // Every change is an entry in the activity.
+        feedState.reload(id);
+        return;
+      }
       // Only a failure that took the field back says "undone"; any other settles quietly.
       if (step.screen.kind === "revert") fail(res.kind, cardFailureText(res.kind, true));
       else react(res.kind);
@@ -1011,8 +1173,14 @@ export function useCardEditor({
         version.current += 1;
         // Another card may be on screen by now (Back, open B): its detail must not be replaced.
         if (shownNow.current?.id === d.id) {
-          setLoaded({ id: d.id, state: "ready", description: res.data.description });
+          setLoaded({
+            id: d.id,
+            state: "ready",
+            description: res.data.description,
+            checklist: res.data.checklist,
+          });
         }
+        feedState.reload(d.id);
         dispatch({ type: "drop", id: d.id });
         setCards((cs) =>
           cs.map((c) => (c.id === d.id ? { ...c, has_description: res.data.has_description } : c)),
@@ -1033,9 +1201,14 @@ export function useCardEditor({
   }
 
   function requestClose() {
-    if (closeAction(canEditNow.current, draftNow.current) === "blocked") {
-      // Not silently: the dialog stays open until the person saves or cancels.
-      notify(DRAFT_OPEN_TEXT);
+    const blocker = closeBlocker({
+      canEdit: canEditNow.current,
+      draft: draftNow.current,
+      commentUnsent: unsentNow.current,
+    });
+    if (blocker !== null) {
+      // Not silently: the dialog stays open until the person saves, posts or clears the text.
+      notify(blocker === "description" ? DRAFT_OPEN_TEXT : COMMENT_OPEN_TEXT);
       return;
     }
     dispatch({ type: "close", id: shownNow.current?.id ?? null });
@@ -1055,8 +1228,8 @@ export function useCardEditor({
 
   const detail: DetailView =
     loaded.id === openId && openId !== null
-      ? { state: loaded.state, description: loaded.description }
-      : { state: "loading", description: null };
+      ? { state: loaded.state, description: loaded.description, checklist: loaded.checklist }
+      : { state: "loading", description: null, checklist: [] };
 
   return {
     tile: shown,
@@ -1066,6 +1239,16 @@ export function useCardEditor({
     draftReadOnly: mode === "readonly",
     hasDirty: anyDirty(drafts),
     saving,
+    checklist: {
+      busyIds: checklist.busyIds,
+      adding: checklist.adding,
+      onToggle: checklist.toggle,
+      onDelete: checklist.remove,
+      onAdd: checklist.add,
+    },
+    feed: feedState.feed,
+    feedUi: feedState.ui,
+    feedControls: feedState.controls,
     setField,
     startEdit: () => {
       const card = shownNow.current;
@@ -1128,8 +1311,22 @@ export function CardDialog({
 
   // Esc cancels only a draft that can be edited; a read-only one is left with Discard.
   const editingDraft = ed.draft !== null && !ed.draftReadOnly;
-  const live = useRef({ pop, draft: editingDraft, cancel: ed.cancelDraft, close: ed.requestClose });
-  live.current = { pop, draft: editingDraft, cancel: ed.cancelDraft, close: ed.requestClose };
+  const live = useRef({
+    pop,
+    draft: editingDraft,
+    commentEdit: ed.feedUi.edit !== null,
+    cancel: ed.cancelDraft,
+    cancelComment: ed.feedControls.onEditCancel,
+    close: ed.requestClose,
+  });
+  live.current = {
+    pop,
+    draft: editingDraft,
+    commentEdit: ed.feedUi.edit !== null,
+    cancel: ed.cancelDraft,
+    cancelComment: ed.feedControls.onEditCancel,
+    close: ed.requestClose,
+  };
 
   // A members or labels popup hangs below its button, inside a body that scrolls. Make the body at
   // least tall enough to hold it (as far as the dialog may grow), so it is not cut off.
@@ -1176,6 +1373,7 @@ export function CardDialog({
       const action = escapeAction({
         popup: s.pop !== null,
         typingInDraft: s.draft && !!target?.closest("[data-desc] textarea"),
+        typingInCommentEdit: s.commentEdit && !!target?.closest("[data-comment-edit] textarea"),
         typing: !!target?.closest("input, textarea, select"),
       });
       e.preventDefault();
@@ -1185,6 +1383,7 @@ export function CardDialog({
         setMemberQuery("");
         trigger?.focus();
       } else if (action === "cancel-draft") s.cancel();
+      else if (action === "cancel-comment-edit") s.cancelComment();
       else if (action === "blur") (target as HTMLElement).blur();
       else s.close();
     };
@@ -1251,6 +1450,10 @@ export function CardDialog({
       detail={ed.detail}
       ui={{ pop, memberQuery, draft: ed.draft, saving: ed.saving, stale: ed.stale }}
       c={c}
+      checklist={ed.checklist}
+      feed={ed.feed}
+      feedUi={ed.feedUi}
+      feedC={ed.feedControls}
       frameRef={frame}
     />,
     document.body,

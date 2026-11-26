@@ -91,6 +91,51 @@ function isStop(code: number): boolean {
   return code <= 32 || code === 60 || code === 62 || code === 34 || code === 0xa0;
 }
 
+/**
+ * The bare http(s) address that starts at `i`, or null: it must follow a boundary, ends before a
+ * space or bracket and leaves out closing punctuation. `end` is the index just after it.
+ */
+function bareLinkAt(src: string, i: number): { href: string; end: number } | null {
+  if (
+    src[i] !== "h" ||
+    (i > 0 && !BOUNDARY.test(src[i - 1])) ||
+    !(src.startsWith("http://", i) || src.startsWith("https://", i))
+  ) {
+    return null;
+  }
+  const n = src.length;
+  let end = i;
+  while (end < n && end - i <= MAX_URL && !isStop(src.charCodeAt(end))) end++;
+  if (end - i > MAX_URL) return null;
+  while (end > i && ".,;:!?)".includes(src[end - 1])) end--;
+  const href = safeHref(src.slice(i, end));
+  return href ? { href, end } : null;
+}
+
+/**
+ * Text with only the bare http(s) addresses made into links, for checklist items and comments: no
+ * Markdown marks, no `[label](address)`. Everything else, line breaks included, stays as written.
+ */
+export function linkify(src: string): Inline[] {
+  const out: Inline[] = [];
+  let text = "";
+  let i = 0;
+  while (i < src.length) {
+    const bare = bareLinkAt(src, i);
+    if (bare) {
+      if (text) out.push({ t: "text", v: text });
+      text = "";
+      out.push({ t: "link", href: bare.href, label: null });
+      i = bare.end;
+    } else {
+      text += src[i];
+      i++;
+    }
+  }
+  if (text) out.push({ t: "text", v: text });
+  return out;
+}
+
 function parseInline(src: string, bold: boolean, italic: boolean): Inline[] {
   const out: Inline[] = [];
   const n = src.length;
@@ -158,22 +203,13 @@ function parseInline(src: string, bold: boolean, italic: boolean): Inline[] {
         i = link.end + 1;
         continue;
       }
-    } else if (
-      ch === "h" &&
-      (i === 0 || BOUNDARY.test(src[i - 1])) &&
-      (src.startsWith("http://", i) || src.startsWith("https://", i))
-    ) {
-      let end = i;
-      while (end < n && end - i <= MAX_URL && !isStop(src.charCodeAt(end))) end++;
-      if (end - i <= MAX_URL) {
-        while (end > i && ".,;:!?)".includes(src[end - 1])) end--;
-        const href = safeHref(src.slice(i, end));
-        if (href) {
-          flush();
-          out.push({ t: "link", href, label: null });
-          i = end;
-          continue;
-        }
+    } else {
+      const bare = bareLinkAt(src, i);
+      if (bare) {
+        flush();
+        out.push({ t: "link", href: bare.href, label: null });
+        i = bare.end;
+        continue;
       }
     }
     text += ch;

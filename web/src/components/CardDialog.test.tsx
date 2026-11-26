@@ -397,3 +397,75 @@ describe("CardDialogView when the card is gone", () => {
     expect(html).not.toContain("<textarea");
   });
 });
+
+describe("CardDialogView checklist and comments", () => {
+  const checklist = [
+    { id: 1, text: "Tape", done: true },
+    { id: 2, text: "Boxes https://example.com/list", done: false },
+  ];
+  const feed = {
+    state: "ready" as const,
+    more: false,
+    entries: [
+      {
+        type: "comment" as const,
+        id: 4,
+        author: { id: 2, name: "Bo Tran", avatar_url: null },
+        text: "Ordered the tape",
+        created_at: "2026-11-20T09:00:00Z",
+        edited_at: null,
+        editable_until: "2999-01-01T00:00:00Z",
+      },
+    ],
+  };
+  const NOW = Date.parse("2026-11-20T12:00:00Z");
+  const withExtras = { detail: { state: "ready" as const, description: null, checklist }, feed, now: NOW };
+
+  it("has two columns: the card on the left, comments and activity on the right", () => {
+    const { html, text } = render(withExtras);
+    expect(html).toContain('class="modal-cols"');
+    expect(html).toMatch(/class="modal-body"/);
+    expect(html).toMatch(/<section class="modal-side"/);
+    expect(html.indexOf("Checklist")).toBeLessThan(html.indexOf("Comments and activity"));
+    expect(text).toContain("Checklist");
+    expect(text).toContain("Comments and activity");
+  });
+
+  it.each(["owner", "member"] as const)("lets a board %s add items, delete them and comment", (role) => {
+    const { html, text } = render(withExtras, role);
+    expect(html).toContain('placeholder="Add an item"');
+    expect(html).toContain('aria-label="Delete item: Tape"');
+    expect(html).toContain('aria-label="Write a comment"');
+    expect(text).toContain("Ordered the tape");
+    expect(html).toMatch(/class="linkish"[^>]*>Edit<\/button>/);
+  });
+
+  it("gives an observer disabled checkboxes, no add form, no delete, no comment box and no Edit or Delete", () => {
+    const { html, text } = render(withExtras, "observer");
+    const boxes = html.match(/<input[^>]*type="checkbox"[^>]*>/g) ?? [];
+    expect(boxes).toHaveLength(2);
+    for (const box of boxes) expect(box).toContain("disabled");
+    expect(html).not.toContain("Add an item");
+    expect(html).not.toContain("Delete item");
+    expect(html).not.toContain('aria-label="Write a comment"');
+    expect(text).toContain("Observers can read comments but not post.");
+    expect(text).toContain("Ordered the tape");
+    expect(html).not.toMatch(/class="linkish"/);
+  });
+
+  it("shows checklist item links as links", () => {
+    expect(render(withExtras).html).toContain('href="https://example.com/list"');
+  });
+
+  it("shows an empty checklist and a loading feed while the detail is still on its way", () => {
+    const { html } = render({
+      detail: { state: "loading", description: null },
+      feed: { state: "loading", entries: [], more: false },
+    });
+    expect(html).toContain('aria-busy="true"');
+  });
+
+  it("keeps its checklist and comments sentence in the gone dialog", () => {
+    expect(render({ tile: null }).text).toContain("Its comments and checklist are kept.");
+  });
+});

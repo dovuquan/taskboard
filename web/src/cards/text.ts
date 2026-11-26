@@ -75,3 +75,55 @@ export function descriptionFailureText(kind: CardError): string {
       return "That did not go through. Your description was not saved; the text is still here.";
   }
 }
+
+export const COMMENT_OPEN_TEXT = "You have an unsent comment. Post or clear it first.";
+export const WINDOW_CLOSED_TEXT = "You can only change a comment for 24 hours after posting it.";
+export const COMMENT_UPDATED_TEXT = "Comment updated";
+export const COMMENT_DELETED_TEXT = "Comment deleted";
+export const ITEM_DELETED_TEXT = "Checklist item deleted";
+export const UNDO_FAILED_TEXT = "Couldn't undo that. Undo is only open for a minute after deleting.";
+
+/**
+ * The toast for a failed checklist change. `undone` is true when the screen already showed the
+ * change and has now taken it back.
+ */
+export function checklistFailureText(kind: CardError, undone = false): string {
+  switch (kind) {
+    case "checklist_limit":
+      return "This card has 100 checklist items, the limit for one card. Delete some to add more.";
+    case "item_not_found":
+      return "That checklist item was already removed. The card was reloaded.";
+    case "forbidden":
+      return "You can no longer change the checklist on this card.";
+    case "invalid":
+      return "That item could not be saved. It needs 1 to 200 characters.";
+    default:
+      return cardFailureText(kind, undone);
+  }
+}
+
+/** The toast for a failed comment change; typed text stays in its box. */
+export function commentFailureText(kind: CardError): string {
+  switch (kind) {
+    case "comment_limit":
+      return "This card has 500 comments, the limit for one card. Delete some to add more.";
+    case "comment_not_found":
+      return "That comment was already deleted. The comments were reloaded.";
+    case "edit_window_closed":
+      return WINDOW_CLOSED_TEXT;
+    case "forbidden":
+      return "You can no longer post or change comments on this card.";
+    case "invalid":
+      return "That comment could not be saved. It needs 1 to 5,000 characters.";
+    case "network":
+      return "Can't reach Taskboard. Your comment was not saved; the text is still here.";
+    case "expired":
+      return "Your session has ended. Your comment was not saved; the text is still here. Copy it, then reload the page and sign in again.";
+    case "card_not_found":
+    case "list_not_found":
+    case "conflict":
+      return "That card was moved or archived by someone else. Your comment was not saved.";
+    default:
+      return "That did not go through. Try again.";
+  }
+}

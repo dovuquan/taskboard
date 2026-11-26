@@ -175,7 +175,7 @@ export function findByKey(cards: Card[], key: string): Card | null {
   return cards.find((c) => c.key === key) ?? null;
 }
 
-/** The tile of a card detail: everything but the description. */
+/** The tile of a card detail: everything but the description and the checklist items. */
 export function tileOf(detail: CardDetail): Card {
   return {
     id: detail.id,
@@ -186,6 +186,9 @@ export function tileOf(detail: CardDetail): Card {
     member_ids: detail.member_ids,
     due_on: detail.due_on,
     has_description: detail.has_description,
+    checklist_done: detail.checklist_done,
+    checklist_total: detail.checklist_total,
+    comment_count: detail.comment_count,
   };
 }
 
@@ -427,6 +430,19 @@ export function closeAction(canEdit: boolean, entry: DraftEntry | undefined): "c
   return canEdit && dirtyEntry(entry) ? "blocked" : "close";
 }
 
+/**
+ * What stops the dialog from closing: an unsaved description, then an unsent comment (the comment
+ * box or an edit that was changed). Someone who can no longer save or post is never held back.
+ */
+export function closeBlocker(state: {
+  canEdit: boolean;
+  draft: DraftEntry | undefined;
+  commentUnsent: boolean;
+}): "description" | "comment" | null {
+  if (closeAction(state.canEdit, state.draft) === "blocked") return "description";
+  return state.canEdit && state.commentUnsent ? "comment" : null;
+}
+
 /** A session that ended may reload the page, unless that would destroy unsaved text. */
 export function expiredAction(unsavedText: boolean): "reload" | "keep" {
   return unsavedText ? "keep" : "reload";
@@ -492,14 +508,19 @@ export function titleBoxHeight(box: {
   return box.scrollHeight + (box.offsetHeight - box.clientHeight);
 }
 
-/** What Esc does in the card dialog: a popup first, then the description edit, a field, the dialog. */
+/**
+ * What Esc does in the card dialog: a popup first, then the description edit, a comment edit, a
+ * field, the dialog.
+ */
 export function escapeAction(state: {
   popup: boolean;
   typingInDraft: boolean;
+  typingInCommentEdit: boolean;
   typing: boolean;
-}): "close-popup" | "cancel-draft" | "blur" | "close" {
+}): "close-popup" | "cancel-draft" | "cancel-comment-edit" | "blur" | "close" {
   if (state.popup) return "close-popup";
   if (state.typingInDraft) return "cancel-draft";
+  if (state.typingInCommentEdit) return "cancel-comment-edit";
   if (state.typing) return "blur";
   return "close";
 }

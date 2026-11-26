@@ -264,10 +264,48 @@ export type Card = {
   /** The due day as YYYY-MM-DD, or null. */
   due_on: string | null;
   has_description: boolean;
+  /**
+   * Checklist items done, checklist items, and comments. The server always sends them; they are
+   * optional here only so a tile built without them (a test fixture) is still a `Card`.
+   */
+  checklist_done?: number;
+  checklist_total?: number;
+  comment_count?: number;
 };
 
-/** One card with its description, as `GET` and the card edits return it. */
-export type CardDetail = Card & { description: string | null };
+/** One checklist item; the list comes in the order the items were added. */
+export type ChecklistItem = { id: number; text: string; done: boolean };
+
+/** One card with its description and checklist, as `GET` and the card edits return it. */
+export type CardDetail = Card & { description: string | null; checklist: ChecklistItem[] };
+
+/** Someone named in a comment or an activity entry; `name` can be missing. */
+export type FeedPerson = { id: number; name: string | null; avatar_url: string | null };
+
+/** One comment. `editable_until` is set only while the caller may still edit or delete it. */
+export type Comment = {
+  id: number;
+  author: FeedPerson | null;
+  text: string;
+  created_at: string;
+  edited_at: string | null;
+  editable_until: string | null;
+};
+
+export type CommentEntry = Comment & { type: "comment" };
+
+/** One change of the card as the activity shows it; `data` depends on `kind`. */
+export type EventEntry = {
+  type: "event";
+  id: number;
+  at: string;
+  actor: FeedPerson | null;
+  kind: string;
+  data: Record<string, unknown>;
+};
+
+export type FeedEntry = CommentEntry | EventEntry;
+export type Feed = { entries: FeedEntry[]; more: boolean };
 
 /** One of the board's labels; `color` is the suffix of the `--l-<color>` token. */
 export type Label = { id: number; name: string; color: string };
@@ -281,7 +319,12 @@ export type CardError =
   | "card_not_found"
   | "list_not_found"
   | "not_assignable"
-  | "label_not_found";
+  | "label_not_found"
+  | "item_not_found"
+  | "comment_not_found"
+  | "edit_window_closed"
+  | "checklist_limit"
+  | "comment_limit";
 export type CardsResult<T> = { kind: "ok"; data: T } | { kind: CardError };
 
 /** What a drop tells the server: where the card goes and where it was, for the stale check. */
@@ -306,6 +349,11 @@ function cardFailure(status: number, body: unknown): CardError {
   if (status === 404 && detail === "card_not_found") return "card_not_found";
   if (status === 404 && detail === "list_not_found") return "list_not_found";
   if (status === 404 && detail === "label_not_found") return "label_not_found";
+  if (status === 404 && detail === "item_not_found") return "item_not_found";
+  if (status === 404 && detail === "comment_not_found") return "comment_not_found";
+  if (status === 403 && detail === "edit_window_closed") return "edit_window_closed";
+  if (status === 422 && detail === "checklist_limit") return "checklist_limit";
+  if (status === 422 && detail === "comment_limit") return "comment_limit";
   if (status === 422 && detail === "card_limit") return "card_limit";
   if (status === 422 && detail === "not_assignable") return "not_assignable";
   return boardFailure(status, body);
@@ -335,6 +383,31 @@ export const addCardLabel = (boardId: number, cardId: number, labelId: number) =
   callCard<CardDetail>("PUT", `/api/boards/${boardId}/cards/${cardId}/labels/${labelId}`);
 export const removeCardLabel = (boardId: number, cardId: number, labelId: number) =>
   callCard<CardDetail>("DELETE", `/api/boards/${boardId}/cards/${cardId}/labels/${labelId}`);
+
+const itemUrl = (boardId: number, cardId: number, itemId?: number) =>
+  `/api/boards/${boardId}/cards/${cardId}/checklist${itemId === undefined ? "" : `/${itemId}`}`;
+const commentUrl = (boardId: number, cardId: number, commentId?: number) =>
+  `/api/boards/${boardId}/cards/${cardId}/comments${commentId === undefined ? "" : `/${commentId}`}`;
+
+export const addChecklistItem = (boardId: number, cardId: number, text: string) =>
+  callCard<CardDetail>("POST", itemUrl(boardId, cardId), { text });
+export const setChecklistItem = (boardId: number, cardId: number, itemId: number, done: boolean) =>
+  callCard<CardDetail>("PATCH", itemUrl(boardId, cardId, itemId), { done });
+export const deleteChecklistItem = (boardId: number, cardId: number, itemId: number) =>
+  callCard<CardDetail>("DELETE", itemUrl(boardId, cardId, itemId));
+export const restoreChecklistItem = (boardId: number, cardId: number, itemId: number) =>
+  callCard<CardDetail>("POST", `${itemUrl(boardId, cardId, itemId)}/restore`, {});
+
+export const getFeed = (boardId: number, cardId: number) =>
+  callCard<Feed>("GET", `/api/boards/${boardId}/cards/${cardId}/feed`);
+export const postComment = (boardId: number, cardId: number, text: string) =>
+  callCard<Comment>("POST", commentUrl(boardId, cardId), { text });
+export const editComment = (boardId: number, cardId: number, commentId: number, text: string) =>
+  callCard<Comment>("PATCH", commentUrl(boardId, cardId, commentId), { text });
+export const deleteComment = (boardId: number, cardId: number, commentId: number) =>
+  callCard<undefined>("DELETE", commentUrl(boardId, cardId, commentId));
+export const restoreComment = (boardId: number, cardId: number, commentId: number) =>
+  callCard<Comment>("POST", `${commentUrl(boardId, cardId, commentId)}/restore`, {});
 
 export async function moveCard(boardId: number, cardId: number, move: CardMove): Promise<MoveResult> {
   const res = await send(`/api/boards/${boardId}/cards/${cardId}/move`, {
