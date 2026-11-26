@@ -4,23 +4,32 @@ import {
   addBoardMember,
   addCardLabel,
   addCardMember,
+  addChecklistItem,
   archiveList,
   copyCard,
   createBoard,
   createCard,
   createList,
+  deleteChecklistItem,
+  deleteComment,
+  editComment,
   getBoard,
   getCard,
   getCards,
+  getFeed,
   getLabels,
   moveCard,
   patchCard,
+  postComment,
   removeCardLabel,
   removeCardMember,
   getLists,
   moveList,
   renameList,
+  restoreChecklistItem,
+  restoreComment,
   restoreList,
+  setChecklistItem,
   getBoardMembers,
   getBoards,
   getConfig,
@@ -636,6 +645,142 @@ describe("card detail api", () => {
     expect(await getCard(7, 9)).toEqual({ kind: "network" });
     expect(await patchCard(7, 9, { due_on: null })).toEqual({ kind: "network" });
     expect(await getLabels()).toEqual({ kind: "network" });
+  });
+});
+
+describe("checklist and comment calls", () => {
+  const detail = {
+    id: 9,
+    key: "TB-9",
+    list_id: 4,
+    title: "Pack boxes",
+    label_ids: [],
+    member_ids: [],
+    due_on: null,
+    has_description: false,
+    description: null,
+    checklist_done: 0,
+    checklist_total: 1,
+    comment_count: 0,
+    checklist: [{ id: 5, text: "Tape", done: false }],
+  };
+  const comment = {
+    id: 3,
+    author: { id: 1, name: "Ann Lee", avatar_url: null },
+    text: "Hello",
+    created_at: "2026-11-20T09:00:00Z",
+    edited_at: null,
+    editable_until: "2026-11-21T09:00:00Z",
+  };
+  const base = "/api/boards/7/cards/9";
+
+  function first(fetchMock: ReturnType<typeof stubFetch>) {
+    return fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  }
+
+  it("adds a checklist item with POST and the text", async () => {
+    const fetchMock = stubFetch(async () => reply(201, detail));
+    expect(await addChecklistItem(7, 9, "Tape")).toEqual({ kind: "ok", data: detail });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"text":"Tape"}');
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("checks and unchecks an item with PATCH and done", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    await setChecklistItem(7, 9, 5, true);
+    await setChecklistItem(7, 9, 5, false);
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist/5`);
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"done":true}');
+    expect((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body).toBe('{"done":false}');
+  });
+
+  it("deletes an item and restores it, both answering the card", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await deleteChecklistItem(7, 9, 5)).toEqual({ kind: "ok", data: detail });
+    expect(await restoreChecklistItem(7, 9, 5)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist/5`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    const [rUrl, rInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(rUrl).toBe(`${base}/checklist/5/restore`);
+    expect(rInit.method).toBe("POST");
+    expect(rInit.body).toBe("{}");
+  });
+
+  it("reads the feed", async () => {
+    const feed = { entries: [{ type: "comment", ...comment }], more: false };
+    const fetchMock = stubFetch(async () => reply(200, feed));
+    expect(await getFeed(7, 9)).toEqual({ kind: "ok", data: feed });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/feed`);
+    expect(init.method).toBe("GET");
+  });
+
+  it("posts and edits a comment with the text", async () => {
+    const fetchMock = stubFetch(async () => reply(201, comment));
+    expect(await postComment(7, 9, "Hello")).toEqual({ kind: "ok", data: comment });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/comments`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"text":"Hello"}');
+    const edited = stubFetch(async () => reply(200, comment));
+    expect(await editComment(7, 9, 3, "Hi")).toEqual({ kind: "ok", data: comment });
+    const [eUrl, eInit] = first(edited);
+    expect(eUrl).toBe(`${base}/comments/3`);
+    expect(eInit.method).toBe("PATCH");
+    expect(eInit.body).toBe('{"text":"Hi"}');
+  });
+
+  it("deletes a comment (204, no body) and restores it", async () => {
+    const del = stubFetch(async () => new Response(null, { status: 204 }));
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind: "ok", data: undefined });
+    const [url, init] = first(del);
+    expect(url).toBe(`${base}/comments/3`);
+    expect(init.method).toBe("DELETE");
+    const restore = stubFetch(async () => reply(200, comment));
+    expect(await restoreComment(7, 9, 3)).toEqual({ kind: "ok", data: comment });
+    const [rUrl, rInit] = first(restore);
+    expect(rUrl).toBe(`${base}/comments/3/restore`);
+    expect(rInit.method).toBe("POST");
+    expect(rInit.body).toBe("{}");
+  });
+
+  it.each([
+    [404, { detail: "item_not_found" }, "item_not_found"],
+    [404, { detail: "comment_not_found" }, "comment_not_found"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [403, { detail: "edit_window_closed" }, "edit_window_closed"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [422, { detail: "checklist_limit" }, "checklist_limit"],
+    [422, { detail: "comment_limit" }, "comment_limit"],
+    [422, [{ type: "string_too_short", loc: ["body", "text"], msg: "too short" }], "invalid"],
+    [401, { detail: "not_signed_in" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await addChecklistItem(7, 9, "x")).toEqual({ kind });
+    expect(await setChecklistItem(7, 9, 5, true)).toEqual({ kind });
+    expect(await deleteChecklistItem(7, 9, 5)).toEqual({ kind });
+    expect(await restoreChecklistItem(7, 9, 5)).toEqual({ kind });
+    expect(await getFeed(7, 9)).toEqual({ kind });
+    expect(await postComment(7, 9, "x")).toEqual({ kind });
+    expect(await editComment(7, 9, 3, "x")).toEqual({ kind });
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind });
+    expect(await restoreComment(7, 9, 3)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await addChecklistItem(7, 9, "x")).toEqual({ kind: "network" });
+    expect(await getFeed(7, 9)).toEqual({ kind: "network" });
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind: "network" });
   });
 });
 

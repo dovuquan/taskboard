@@ -1,10 +1,56 @@
-import { type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Card, Label } from "../api";
 import { dueState, dueTitle, formatDue } from "../cards/due";
 import { oneLine } from "../cards/logic";
+import { linkify, shortUrl } from "../cards/markdown";
 import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
+
+const GLYPHS = {
+  check: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <path d="m8 12 3 3 5-6" />
+    </>
+  ),
+  chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />,
+  act: <circle cx="12" cy="12" r="3" />,
+};
+
+/** The checklist, comment and activity icons (the shared icon set has no room for them yet). */
+export function GlyphIcon({ name }: { name: keyof typeof GLYPHS }) {
+  return (
+    <svg className="i" viewBox="0 0 24 24" aria-hidden="true">
+      {GLYPHS[name]}
+    </svg>
+  );
+}
+
+/**
+ * Plain text in which only bare http(s) addresses are links: new tab, host and the start of the
+ * path as the text, the full address in the tooltip. Nothing else is formatted, and the text is
+ * never read as HTML.
+ */
+export function LinkedText({ text }: { text: string }) {
+  const parts: ReactNode[] = linkify(text).map((node, i) =>
+    node.t === "link" ? (
+      <a
+        key={i}
+        className="ext"
+        href={node.href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={node.href}
+      >
+        {shortUrl(node.href)}
+      </a>
+    ) : node.t === "text" ? (
+      node.v
+    ) : null,
+  );
+  return <>{parts}</>;
+}
 
 /** A person a card can show: the board's people carry at least these fields. */
 export type CardPerson = { id: number; name: string | null; email: string };
@@ -65,7 +111,15 @@ export function CardTile({
   const state = card.due_on ? dueState(card.due_on) : null;
   const assigned = card.member_ids.map((id) => ({ id, person: people.find((p) => p.id === id) }));
   const names = assigned.map((a) => a.person?.name ?? a.person?.email ?? "an unknown person").join(", ");
-  const hasBadges = card.due_on !== null || card.has_description || assigned.length > 0;
+  const checkDone = card.checklist_done ?? 0;
+  const checkTotal = card.checklist_total ?? 0;
+  const comments = card.comment_count ?? 0;
+  const hasBadges =
+    card.due_on !== null ||
+    card.has_description ||
+    checkTotal > 0 ||
+    comments > 0 ||
+    assigned.length > 0;
   return (
     <div
       className={classes.join(" ")}
@@ -116,6 +170,20 @@ export function CardTile({
             <span className="b" title="Has a description">
               <Icon name="text" />
               <span className="sr">Has a description</span>
+            </span>
+          )}
+          {checkTotal > 0 && (
+            <span className={checkDone === checkTotal ? "b done" : "b"} title="Checklist">
+              <GlyphIcon name="check" />
+              <span aria-hidden="true">{`${checkDone}/${checkTotal}`}</span>
+              <span className="sr">{`Checklist: ${checkDone} of ${checkTotal} done`}</span>
+            </span>
+          )}
+          {comments > 0 && (
+            <span className="b" title="Comments">
+              <GlyphIcon name="chat" />
+              <span aria-hidden="true">{comments}</span>
+              <span className="sr">{comments === 1 ? "1 comment" : `${comments} comments`}</span>
             </span>
           )}
           {assigned.length > 0 && (

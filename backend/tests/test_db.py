@@ -55,6 +55,26 @@ COLUMNS = {
     "labels": {"id", "name", "color"},
     "card_members": {"card_id", "user_id"},
     "card_labels": {"card_id", "label_id"},
+    "checklist_items": {
+        "id",
+        "card_id",
+        "text",
+        "done",
+        "created_by",
+        "created_at",
+        "deleted_at",
+        "deleted_by",
+    },
+    "comments": {
+        "id",
+        "card_id",
+        "author_id",
+        "text",
+        "created_at",
+        "edited_at",
+        "deleted_at",
+        "deleted_by",
+    },
 }
 
 LABELS = ["Launch", "Bug", "Docs", "Ops", "Marketing", "Research", "Design"]
@@ -134,6 +154,21 @@ def test_card_link_tables_have_composite_keys_foreign_keys_and_indexes(db_url):
     assert ("name",) in unique
 
 
+def test_checklist_and_comment_tables_have_foreign_keys_and_indexes(db_url):
+    run_migrations(db_url)
+
+    inspector = inspect(create_engine(db_url))
+    for table, targets in (
+        ("checklist_items", {"cards", "users"}),
+        ("comments", {"cards", "users"}),
+    ):
+        assert inspector.get_pk_constraint(table)["constrained_columns"] == ["id"]
+        assert {fk["referred_table"] for fk in inspector.get_foreign_keys(table)} == targets
+        assert ["card_id"] in [i["column_names"] for i in inspector.get_indexes(table)]
+    subject = [i for i in inspector.get_indexes("events") if i["name"] == "ix_events_subject"]
+    assert [i["column_names"] for i in subject] == [["subject_type", "subject_id"]]
+
+
 def test_downgrade_removes_the_new_tables_and_upgrade_restores_them(db_url):
     run_migrations(db_url)
     config = Config()
@@ -147,6 +182,22 @@ def test_downgrade_removes_the_new_tables_and_upgrade_restores_them(db_url):
 
     command.upgrade(config, "head")
     assert [name for _id, name, _c in _labels(db_url)] == LABELS
+
+
+def test_downgrade_to_0005_drops_the_checklist_and_comment_tables(db_url):
+    run_migrations(db_url)
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    config.set_main_option("sqlalchemy.url", db_url)
+
+    command.downgrade(config, "0005")
+    inspector = inspect(create_engine(db_url))
+    assert not {"checklist_items", "comments"} & set(inspector.get_table_names())
+    assert "ix_events_subject" not in [i["name"] for i in inspector.get_indexes("events")]
+    assert "card_labels" in inspector.get_table_names()
+
+    command.upgrade(config, "head")
+    assert {"checklist_items", "comments"} <= set(inspect(create_engine(db_url)).get_table_names())
 
 
 def test_foreign_keys_are_enforced(db_url):

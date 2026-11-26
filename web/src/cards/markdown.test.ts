@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Block, type Inline, parseMarkdown, safeHref, shortUrl } from "./markdown";
+import { type Block, type Inline, linkify, parseMarkdown, safeHref, shortUrl } from "./markdown";
 
 const t = (v: string): Inline => ({ t: "text", v });
 
@@ -361,5 +361,58 @@ describe("hostile input stays fast", () => {
     const start = performance.now();
     parseMarkdown(src);
     expect(performance.now() - start).toBeLessThan(200);
+  });
+});
+
+describe("linkify", () => {
+  it("leaves plain text as one text node, markers and line breaks included", () => {
+    expect(linkify("**not bold** `not code`\nsecond line")).toEqual([t("**not bold** `not code`\nsecond line")]);
+    expect(linkify("")).toEqual([]);
+  });
+
+  it("turns a bare http(s) address into a link and keeps the words around it", () => {
+    expect(linkify("see https://example.com/docs/guide now")).toEqual([
+      t("see "),
+      { t: "link", href: "https://example.com/docs/guide", label: null },
+      t(" now"),
+    ]);
+  });
+
+  it("does not take closing punctuation into the address", () => {
+    expect(linkify("(https://example.com/a), ok")).toEqual([
+      t("("),
+      { t: "link", href: "https://example.com/a", label: null },
+      t("), ok"),
+    ]);
+  });
+
+  it("finds several links", () => {
+    const nodes = linkify("http://a.example/x https://b.example/y");
+    expect(nodes.filter((n) => n.t === "link")).toHaveLength(2);
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "JAVASCRIPT:alert(1)",
+    "data:text/html,hi",
+    "ftp://example.com/file",
+    "HTTPS://example.com/",
+    "https://user:pw@example.com/",
+    "http:// bad",
+  ])("never makes a link of %s", (src) => {
+    expect(linkify(src).every((n) => n.t === "text")).toBe(true);
+    expect(linkify(`go to ${src} now`).every((n) => n.t === "text")).toBe(true);
+  });
+
+  it("does not read a [label](address) as a labelled link", () => {
+    const nodes = linkify("[click me](javascript:alert(1))");
+    expect(nodes.every((n) => n.t === "text")).toBe(true);
+  });
+
+  it("parses 5,000 characters of hostile text quickly", () => {
+    const start = performance.now();
+    linkify("http://".repeat(700).slice(0, 5000));
+    linkify(" https://example.com/".repeat(250));
+    expect(performance.now() - start).toBeLessThan(500);
   });
 });

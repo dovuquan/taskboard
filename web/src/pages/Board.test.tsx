@@ -351,6 +351,58 @@ describe("BoardView cards", () => {
   });
 });
 
+describe("BoardView card tile checklist and comment badges", () => {
+  const tileOf = (html: string, key: string) => {
+    const start = html.indexOf(`>${key}</span>`);
+    const end = html.indexOf("</div>", start);
+    return html.slice(start, end);
+  };
+  const draw = (c: Card) => render({ lists: some, cards: [c], labels, people });
+
+  it("shows done of total as a checklist badge", () => {
+    const tile = tileOf(draw(card(1, 11, "Pack boxes", { checklist_done: 2, checklist_total: 5 })).html, "TB-1");
+    expect(tile).toContain('class="b" title="Checklist"');
+    expect(tile).toContain("2/5");
+    expect(tile).toMatch(/class="sr"[^>]*>Checklist: 2 of 5 done</);
+    expect(tile).not.toContain("b done");
+  });
+
+  it("gives the checklist badge the done style when every item is checked", () => {
+    const tile = tileOf(draw(card(1, 11, "Pack boxes", { checklist_done: 5, checklist_total: 5 })).html, "TB-1");
+    expect(tile).toContain('class="b done" title="Checklist"');
+    expect(tile).toContain("5/5");
+  });
+
+  it("shows no checklist badge for an empty checklist", () => {
+    const tile = tileOf(draw(card(1, 11, "Pack boxes", { checklist_done: 0, checklist_total: 0 })).html, "TB-1");
+    expect(tile).not.toContain("Checklist");
+    expect(tile).not.toContain('class="badges"');
+  });
+
+  it("shows the number of comments", () => {
+    const tile = tileOf(draw(card(1, 11, "Pack boxes", { comment_count: 3 })).html, "TB-1");
+    expect(tile).toContain('class="b" title="Comments"');
+    expect(tile).toMatch(/class="sr"[^>]*>3 comments</);
+    expect(tile).toContain(">3<");
+  });
+
+  it("says 1 comment in the singular and shows no badge for none", () => {
+    expect(tileOf(draw(card(1, 11, "Pack boxes", { comment_count: 1 })).html, "TB-1")).toMatch(/>1 comment</);
+    expect(tileOf(draw(card(1, 11, "Pack boxes", { comment_count: 0 })).html, "TB-1")).not.toContain("Comments");
+  });
+
+  it("puts the badges after the description badge and before the people", () => {
+    const tile = tileOf(
+      draw(card(1, 11, "Pack boxes", { has_description: true, checklist_done: 1, checklist_total: 2, comment_count: 1, member_ids: [1] }))
+        .html,
+      "TB-1",
+    );
+    expect(tile.indexOf("Has a description")).toBeLessThan(tile.indexOf('title="Checklist"'));
+    expect(tile.indexOf('title="Checklist"')).toBeLessThan(tile.indexOf('title="Comments"'));
+    expect(tile.indexOf('title="Comments"')).toBeLessThan(tile.indexOf('class="stack"'));
+  });
+});
+
 describe("BoardView card tile details", () => {
   const tileOf = (html: string, key: string) => {
     const start = html.indexOf(`>${key}</span>`);

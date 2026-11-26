@@ -14,6 +14,7 @@ import {
   assignablePeople,
   canAddCard,
   closeAction,
+  closeBlocker,
   createSaveTracker,
   descriptionToSend,
   dialogCard,
@@ -288,6 +289,7 @@ describe("oneLine", () => {
 });
 
 const full = (id: number, over: Partial<Card> = {}): Card => ({ ...card(id, 1), ...over });
+const counted = { checklist_done: 2, checklist_total: 5, comment_count: 3 };
 
 describe("findByKey", () => {
   const cards = [card(1, 1), card(2, 1), card(12, 2)];
@@ -310,8 +312,9 @@ describe("findByKey", () => {
 describe("tileOf", () => {
   it("drops the description and keeps every tile field", () => {
     const detail: CardDetail = {
-      ...full(5, { label_ids: [1, 2], member_ids: [3], due_on: "2026-11-30", has_description: true }),
+      ...full(5, { label_ids: [1, 2], member_ids: [3], due_on: "2026-11-30", has_description: true, ...counted }),
       description: "Hello",
+      checklist: [{ id: 1, text: "Tape", done: true }],
     };
     expect(tileOf(detail)).toEqual({
       id: 5,
@@ -322,7 +325,16 @@ describe("tileOf", () => {
       member_ids: [3],
       due_on: "2026-11-30",
       has_description: true,
+      checklist_done: 2,
+      checklist_total: 5,
+      comment_count: 3,
     });
+  });
+
+  it("does not carry the checklist items into the tile", () => {
+    const detail: CardDetail = { ...full(5, counted), description: null, checklist: [{ id: 1, text: "Tape", done: false }] };
+    expect(tileOf(detail)).not.toHaveProperty("checklist");
+    expect(tileOf(detail)).not.toHaveProperty("description");
   });
 });
 
@@ -807,10 +819,19 @@ describe("description draft", () => {
 });
 
 describe("escapeAction", () => {
-  const base = { popup: false, typingInDraft: false, typing: false };
+  const base = { popup: false, typingInDraft: false, typingInCommentEdit: false, typing: false };
+
+  it("cancels an open comment edit before leaving the field or closing", () => {
+    expect(escapeAction({ ...base, typingInCommentEdit: true, typing: true })).toBe("cancel-comment-edit");
+  });
+
+  it("closes a popup, then a description edit, before a comment edit", () => {
+    expect(escapeAction({ ...base, popup: true, typingInCommentEdit: true, typing: true })).toBe("close-popup");
+    expect(escapeAction({ ...base, typingInDraft: true, typingInCommentEdit: true, typing: true })).toBe("cancel-draft");
+  });
 
   it("closes a popup first, whatever else is going on", () => {
-    expect(escapeAction({ popup: true, typingInDraft: true, typing: true })).toBe("close-popup");
+    expect(escapeAction({ popup: true, typingInDraft: true, typingInCommentEdit: false, typing: true })).toBe("close-popup");
   });
 
   it("cancels the description edit when typing in it", () => {
@@ -823,6 +844,32 @@ describe("escapeAction", () => {
 
   it("closes the dialog when nothing else is open", () => {
     expect(escapeAction(base)).toBe("close");
+  });
+});
+
+describe("closeBlocker", () => {
+  const dirty: DraftEntry = { key: "TB-1", id: 1, text: "new", original: "old" };
+  const clean: DraftEntry = { key: "TB-1", id: 1, text: "old", original: "old" };
+
+  it("lets the dialog close with nothing unsaved", () => {
+    expect(closeBlocker({ canEdit: true, draft: undefined, commentUnsent: false })).toBeNull();
+    expect(closeBlocker({ canEdit: true, draft: clean, commentUnsent: false })).toBeNull();
+  });
+
+  it("blocks on an unsaved description", () => {
+    expect(closeBlocker({ canEdit: true, draft: dirty, commentUnsent: false })).toBe("description");
+  });
+
+  it("blocks on an unsent comment (Close, Esc and the dark area all ask)", () => {
+    expect(closeBlocker({ canEdit: true, draft: undefined, commentUnsent: true })).toBe("comment");
+  });
+
+  it("names the description first when both are open", () => {
+    expect(closeBlocker({ canEdit: true, draft: dirty, commentUnsent: true })).toBe("description");
+  });
+
+  it("does not block someone who can no longer post or save", () => {
+    expect(closeBlocker({ canEdit: false, draft: dirty, commentUnsent: true })).toBeNull();
   });
 });
 

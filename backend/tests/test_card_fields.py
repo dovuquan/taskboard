@@ -33,6 +33,9 @@ TILE_KEYS = {
     "member_ids",
     "due_on",
     "has_description",
+    "checklist_done",
+    "checklist_total",
+    "comment_count",
 }
 
 
@@ -51,7 +54,11 @@ def detail(card_id, key, list_id, title, **extra):
         "member_ids": [],
         "due_on": None,
         "has_description": False,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
         "description": None,
+        "checklist": [],
         **extra,
     }
 
@@ -180,9 +187,12 @@ def test_the_tile_list_and_the_detail_carry_the_new_fields(as_user, db_url):
         "member_ids": members,
         "due_on": "2026-07-04",
         "has_description": True,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
     }
     assert set(tiles.json()[0]) == TILE_KEYS
-    assert one.json() == {**tiles.json()[1], "description": "Some **text**"}
+    assert one.json() == {**tiles.json()[1], "description": "Some **text**", "checklist": []}
     assert w["client"].get(curl(w["board"], w["card"])).json() == detail(
         w["card"], "TB-1", w["list"], "A"
     )
@@ -1204,7 +1214,7 @@ def test_create_and_move_return_the_full_tile(as_user, db_url):
     assert created.json() == {
         k: v
         for k, v in detail(created.json()["id"], "TB-2", w["list"], "N").items()
-        if k != "description"
+        if k not in ("description", "checklist")
     }
     assert moved.status_code == 200
     assert moved.json() == {
@@ -1216,6 +1226,9 @@ def test_create_and_move_return_the_full_tile(as_user, db_url):
         "member_ids": [w["boss"]],
         "due_on": None,
         "has_description": False,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
     }
 
 
@@ -1266,6 +1279,9 @@ def test_the_stale_move_answer_carries_the_full_tile(as_user, db_url, monkeypatc
         "member_ids": [w["cy"]],
         "due_on": "2026-01-02",
         "has_description": True,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
     }
 
 
@@ -1309,6 +1325,9 @@ def test_copy_carries_labels_members_description_and_due_date_in_one_event(as_us
         "member_ids": sorted([w["boss"], w["cy"], pending]),
         "due_on": "2026-05-01",
         "has_description": True,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
     }
     assert card_member_ids(db_url, body["id"]) == body["member_ids"]
     assert card_label_ids(db_url, body["id"]) == [1, 5]

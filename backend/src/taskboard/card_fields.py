@@ -23,7 +23,7 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
-from sqlalchemy import and_, delete, insert, literal, select, update
+from sqlalchemy import and_, case, delete, func, insert, literal, select, update
 from sqlalchemy.orm import Session
 
 from taskboard.auth import get_db
@@ -43,6 +43,8 @@ from taskboard.models import (
     Card,
     CardLabel,
     CardMember,
+    ChecklistItem,
+    Comment,
     Label,
 )
 
@@ -143,6 +145,26 @@ def _tiles(s: Session, board_id: int, prefix: str, rows) -> list[dict[str, Any]]
             .order_by(CardMember.card_id, CardMember.user_id)
         )
     )
+    items = {
+        card_id: (total, done or 0)
+        for card_id, total, done in s.execute(
+            select(
+                ChecklistItem.card_id,
+                func.count(),
+                func.sum(case((ChecklistItem.done.is_(True), 1), else_=0)),
+            )
+            .where(ChecklistItem.card_id.in_(ids), ChecklistItem.deleted_at.is_(None))
+            .group_by(ChecklistItem.card_id)
+        )
+    }
+    notes = {
+        card_id: count
+        for card_id, count in s.execute(
+            select(Comment.card_id, func.count())
+            .where(Comment.card_id.in_(ids), Comment.deleted_at.is_(None))
+            .group_by(Comment.card_id)
+        )
+    }
     return [
         {
             "id": row.id,
@@ -153,6 +175,9 @@ def _tiles(s: Session, board_id: int, prefix: str, rows) -> list[dict[str, Any]]
             "member_ids": people.get(row.id, []),
             "due_on": None if row.due_at is None else row.due_at.date().isoformat(),
             "has_description": bool(row.has_description),
+            "checklist_done": items.get(row.id, (0, 0))[1],
+            "checklist_total": items.get(row.id, (0, 0))[0],
+            "comment_count": notes.get(row.id, 0),
         }
         for row in rows
     ]
@@ -180,7 +205,7 @@ def tile_of(s: Session, board_id: int, prefix: str, card_id: int) -> dict[str, A
 
 
 def card_detail(s: Session, board_id: int, prefix: str, card_id: int) -> dict[str, Any]:
-    """The tile plus the description, for a visible card; else 404 `card_not_found`."""
+    """The tile plus the description and the live checklist, for a visible card; else 404."""
     stmt = (
         select(*_TILE_COLUMNS, Card.description)
         .join(BoardList, BoardList.id == Card.list_id)
@@ -194,7 +219,19 @@ def card_detail(s: Session, board_id: int, prefix: str, card_id: int) -> dict[st
     row = s.execute(stmt).first()
     if row is None:
         raise HTTPException(404, "card_not_found")
-    return {**_tiles(s, board_id, prefix, [row])[0], "description": row.description or None}
+    checklist = [
+        {"id": item_id, "text": text, "done": bool(done)}
+        for item_id, text, done in s.execute(
+            select(ChecklistItem.id, ChecklistItem.text, ChecklistItem.done)
+            .where(ChecklistItem.card_id == card_id, ChecklistItem.deleted_at.is_(None))
+            .order_by(ChecklistItem.id)
+        )
+    ]
+    return {
+        **_tiles(s, board_id, prefix, [row])[0],
+        "description": row.description or None,
+        "checklist": checklist,
+    }
 
 
 def copy_links(s: Session, board_id: int, source_id: int, new_id: int) -> None:
@@ -258,11 +295,13 @@ def _write(
     card_id: int,
     kind: str,
     apply: Callable[[Session, Card, dict[str, Any]], None],
+    record: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Lock, re-check the actor, let `apply` write and fill the event data, answer the card.
 
     The answer is read inside the same transaction, after `apply`, so it shows exactly what this
-    request saw and wrote even if the card is archived right after the commit.
+    request saw and wrote even if the card is archived right after the commit. `record` is the
+    caller module's own `record_change` (looked up at call time), so tests can hook each module.
     """
     board_id, actor_id, prefix = ctx.board.id, ctx.user.id, ctx.board.key_prefix
     data: dict[str, Any] = {}  # filled inside the transaction; record_change reads it afterwards
@@ -281,7 +320,7 @@ def _write(
         answer.update(card_detail(s, board_id, prefix, card_id))
 
     try:
-        record_change(
+        (record or record_change)(
             db,
             change,
             actor_id=actor_id,
