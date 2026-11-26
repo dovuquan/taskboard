@@ -22,9 +22,13 @@ them with the prototype's Board and Card screens (`design/taskboard-prototype.ht
 - **Activity:** every checklist add, check, delete and restore shows in the feed.
 - **Found and fixed in this run:** the title field showed several times after a checklist change
   (two dialog parts shared one React key).
+- **`docker compose up --build` on the existing volume:** the container starts, `taskboard check`
+  inside it prints `integrity: ok` and `schema: 0006 (head)`, it serves the same web bundle as the
+  screenshots (`index-AHFbC6yp.js`), and `GET .../feed` without a session answers 401
+  `not_signed_in`.
 
 ## Not checked
 
-- `docker compose` and real Google sign-in.
+- Signed-in screens inside the container: they need real Google sign-in, left for the owner at G2.
 - The 24-hour edit window in the browser (covered by backend tests with a pinned clock).
 - Phone width, screen readers.
