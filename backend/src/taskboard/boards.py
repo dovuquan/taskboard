@@ -472,22 +472,22 @@ def archive_board(ctx: BoardCtx = _OWNER, db: Session = Depends(get_db)):
         )
         if result.rowcount == 0:
             raise HTTPException(404, "board_not_found")
-        _ensure_acting_owner(s, actor_id, board_id)
+        # The lock is ours; the actor's standing is read as it is now: an owner row, or an admin
+        # who can still see the board. Anything else rolls the archive back (403, or 404 if hidden).
+        s.expire_all()
+        _restore_role(s, ctx.user, s.get(Board, board_id))
         data["name"] = s.scalar(select(Board.name).where(Board.id == board_id))
 
-    try:
-        record_change(
-            db,
-            change,
-            actor_id=actor_id,
-            kind="board.archived",
-            subject_type="board",
-            subject_id=str(board_id),
-            data=data,
-            board_id=board_id,
-        )
-    except NotOwner:
-        raise HTTPException(403, "forbidden") from None
+    record_change(
+        db,
+        change,
+        actor_id=actor_id,
+        kind="board.archived",
+        subject_type="board",
+        subject_id=str(board_id),
+        data=data,
+        board_id=board_id,
+    )
     return {"id": board_id, "name": data["name"]}
 
 

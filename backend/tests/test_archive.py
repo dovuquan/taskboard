@@ -1,9 +1,10 @@
 """Archive and restore: boards, cards, the Archived view, roles, events and limits."""
 
+import re
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import delete, update
 from support import (
     add_board,
     add_card,
@@ -19,7 +20,7 @@ from support import (
 )
 
 from taskboard.cards import visible_card_count
-from taskboard.models import BoardMember, Card, _now
+from taskboard.models import Board, BoardMember, Card, _now
 
 ROLES = ["owner", "member", "observer", "outsider", "private_outsider", "admin"]
 
@@ -45,6 +46,23 @@ def world(as_user, db_url, who="member"):
             "card": card}  # fmt: skip
 
 
+ISO = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z")
+
+
+def people(w):
+    """The members `world` makes, as the API lists them: owners first, then by email."""
+    return [
+        {
+            "id": w["ada"],
+            "name": "Ada",
+            "email": "ada@example.com",
+            "avatar_url": "https://img.example.test/ada.png",
+        },
+        {"id": w["boss"], "name": "Boss", "email": "boss@example.com", "avatar_url": None},
+        {"id": w["cy"], "name": "Cy", "email": "cy@example.com", "avatar_url": None},
+    ]
+
+
 def archive_board_directly(db_url, board_id, at=None):
     set_board_columns(db_url, board_id, archived_at=at or _now())
 
@@ -57,6 +75,24 @@ def archive_card_directly(db_url, card_id, *, by=None, ago=timedelta(minutes=5))
         s.commit()
 
     query(db_url, write)
+
+
+def set_row(db_url, board_id, user_id, role):
+    """Change a person's board role directly; `None` removes their row."""
+
+    def write(s):
+        where = (BoardMember.board_id == board_id, BoardMember.user_id == user_id)
+        if role is None:
+            s.execute(delete(BoardMember).where(*where))
+        else:
+            s.execute(update(BoardMember).where(*where).values(role=role))
+        s.commit()
+
+    query(db_url, write)
+
+
+def board_row(db_url, board_id):
+    return query(db_url, lambda s: s.get(Board, board_id))
 
 
 def card_row(db_url, card_id):
@@ -231,13 +267,19 @@ def test_archiving_a_card_hides_it_and_writes_one_event_with_archived_by(as_user
     response = client.post(card_url(w, "archive"))
 
     assert response.status_code == 200
-    tile = response.json()
-    assert (tile["id"], tile["key"], tile["list_id"], tile["title"]) == (
-        w["card"],
-        "TB-1",
-        w["list"],
-        "A",
-    )
+    assert response.json() == {
+        "id": w["card"],
+        "key": "TB-1",
+        "list_id": w["list"],
+        "title": "A",
+        "label_ids": [],
+        "member_ids": [],
+        "due_on": None,
+        "has_description": False,
+        "checklist_done": 0,
+        "checklist_total": 0,
+        "comment_count": 0,
+    }
     assert client.get(f"/api/boards/{w['board']}/cards").json() == []
     assert client.get(card_url(w)).status_code == 404
     feed = client.get(card_url(w, "feed"))
@@ -400,6 +442,48 @@ def test_a_card_restored_by_someone_else_first_is_a_404_and_writes_nothing(
     assert ours(db_url) == []
 
 
+def test_an_owner_demoted_before_the_card_restore_is_refused(as_user, db_url, monkeypatch):
+    w = world(as_user, db_url, "owner")
+    archive_card_directly(db_url, w["card"], by=w["cy"], ago=timedelta(days=3))
+    interfere(monkeypatch, lambda: set_row(db_url, w["board"], w["ada"], "member"), "cards")
+
+    response = w["client"].post(card_url(w, "restore"))
+
+    assert (response.status_code, response.json()) == (403, {"detail": "forbidden"})
+    assert card_row(db_url, w["card"]).archived_at is not None
+    assert ours(db_url) == []
+
+
+@pytest.mark.parametrize("now", ["observer", None])
+def test_the_archiver_who_lost_access_before_the_card_restore_is_refused(
+    as_user, db_url, monkeypatch, now
+):
+    w = world(as_user, db_url, "member")
+    archive_card_directly(db_url, w["card"], by=w["ada"], ago=timedelta(seconds=10))
+    interfere(monkeypatch, lambda: set_row(db_url, w["board"], w["ada"], now), "cards")
+
+    response = w["client"].post(card_url(w, "restore"))
+
+    assert (response.status_code, response.json()) == (403, {"detail": "forbidden"})
+    assert card_row(db_url, w["card"]).archived_at is not None
+    assert ours(db_url) == []
+
+
+def test_the_archiver_removed_from_a_private_board_before_the_card_restore_is_a_404(
+    as_user, db_url, monkeypatch
+):
+    w = world(as_user, db_url, "member")
+    set_board_columns(db_url, w["board"], visibility="private")
+    archive_card_directly(db_url, w["card"], by=w["ada"], ago=timedelta(seconds=10))
+    interfere(monkeypatch, lambda: set_row(db_url, w["board"], w["ada"], None), "cards")
+
+    response = w["client"].post(card_url(w, "restore"))
+
+    assert (response.status_code, response.json()) == (404, {"detail": "board_not_found"})
+    assert card_row(db_url, w["card"]).archived_at is not None
+    assert ours(db_url) == []
+
+
 def test_a_card_whose_list_is_archived_goes_to_the_end_of_the_first_active_list(as_user, db_url):
     w = world(as_user, db_url, "owner")
     gone = add_list(db_url, w["board"], "Gone", 0.5)
@@ -480,9 +564,16 @@ def test_the_archived_boards_route_is_not_shadowed_by_the_board_id_route(as_user
 
     assert response.status_code == 200
     [tile] = response.json()
-    assert tile["id"] == w["board"] and tile["name"] == "B" and tile["my_role"] == "owner"
-    assert tile["archived_at"].endswith("Z")
-    assert {"member_count", "members", "visibility", "updated_at"} <= set(tile)
+    stamps = {key: tile.pop(key) for key in ("updated_at", "archived_at")}
+    assert all(ISO.fullmatch(value) for value in stamps.values())
+    assert tile == {
+        "id": w["board"],
+        "name": "B",
+        "visibility": "workspace",
+        "my_role": "owner",
+        "member_count": 3,
+        "members": people(w),
+    }
 
 
 def test_archived_boards_are_newest_first(as_user, db_url):
@@ -506,7 +597,16 @@ def test_restoring_a_board_brings_back_its_lists_and_cards(as_user, db_url):
 
     assert response.status_code == 200
     body = response.json()
-    assert (body["id"], body["name"], body["my_role"]) == (board, "B", "owner")
+    stamps = {key: body.pop(key) for key in ("updated_at", "created_at")}
+    assert all(ISO.fullmatch(value) for value in stamps.values())
+    assert body == {
+        "id": board,
+        "name": "B",
+        "visibility": "workspace",
+        "my_role": "owner",
+        "member_count": 3,
+        "members": people(w),
+    }
     assert [t["id"] for t in client.get("/api/boards").json()] == [board]
     assert [row["id"] for row in client.get(f"/api/boards/{board}/lists").json()] == [w["list"]]
     assert [t["id"] for t in client.get(f"/api/boards/{board}/cards").json()] == [w["card"]]
@@ -555,6 +655,51 @@ def test_an_owner_demoted_before_the_archive_is_refused(as_user, db_url, monkeyp
     response = w["client"].post(f"/api/boards/{w['board']}/archive")
 
     assert (response.status_code, response.json()) == (403, {"detail": "forbidden"})
+    assert ours(db_url) == []
+
+
+def test_an_owner_demoted_before_the_board_restore_is_refused(as_user, db_url, monkeypatch):
+    w = world(as_user, db_url, "owner")
+    archive_board_directly(db_url, w["board"])
+    interfere(monkeypatch, lambda: set_row(db_url, w["board"], w["ada"], "member"))
+
+    response = w["client"].post(f"/api/boards/{w['board']}/restore")
+
+    assert (response.status_code, response.json()) == (403, {"detail": "forbidden"})
+    assert board_row(db_url, w["board"]).archived_at is not None
+    assert ours(db_url) == []
+
+
+def test_an_admin_removed_from_a_private_board_before_the_archive_is_refused(
+    as_user, db_url, monkeypatch
+):
+    client = as_user("ada@example.com", "sub-ada", "admin")
+    ada = user_by_email(db_url, "ada@example.com").id
+    boss = add_user(db_url, "boss@example.com")
+    board = add_board(db_url, boss, "P", "private", {boss: "owner", ada: "member"})
+    interfere(monkeypatch, lambda: set_row(db_url, board, ada, None))
+
+    response = client.post(f"/api/boards/{board}/archive")
+
+    assert (response.status_code, response.json()) == (404, {"detail": "board_not_found"})
+    assert board_row(db_url, board).archived_at is None
+    assert ours(db_url) == []
+
+
+def test_an_admin_loses_sight_of_a_board_made_private_before_the_archive(
+    as_user, db_url, monkeypatch
+):
+    w = world(as_user, db_url, "admin")
+
+    def hide():
+        set_board_columns(db_url, w["board"], visibility="private")
+
+    interfere(monkeypatch, hide)
+
+    response = w["client"].post(f"/api/boards/{w['board']}/archive")
+
+    assert (response.status_code, response.json()) == (404, {"detail": "board_not_found"})
+    assert board_row(db_url, w["board"]).archived_at is None
     assert ours(db_url) == []
 
 
