@@ -9,14 +9,14 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, func, make_url, select, text
+from sqlalchemy import String, cast, create_engine, func, make_url, select, text
 from sqlalchemy.exc import DatabaseError, IntegrityError
 from sqlalchemy.orm import Session
 
 from taskboard.db import _MIGRATIONS, database_url, make_engine, run_migrations
 from taskboard.events import record_change
-from taskboard.models import Board, BoardMember, User, WorkspaceMember
-from taskboard.seed import seed_board_content
+from taskboard.models import Board, BoardMember, Event, User, WorkspaceMember
+from taskboard.seed import BoardChanged, seed_board_content
 from taskboard.settings import allowed_hd
 
 SEED_BOARD = "Office move"
@@ -124,11 +124,20 @@ def _seed_board(session: Session, domain: str) -> bool:
 
 
 def _seed_content(session: Session, domain: str) -> tuple[int, int] | None:
-    """Fill the seed board with its sample lists and cards, if it is still untouched."""
+    """Fill the seed board with its sample lists and cards, if it is still untouched.
+
+    Only pending seed people count (never signed in, `google_sub` is null): a seed person who has
+    signed in is a real account, so it is skipped, and if that is the owner nothing is added. The
+    board must also be one the seed made: its `board.created` event has no actor.
+    """
     people = {
         local: user_id
         for _, local in SEED_PEOPLE
-        if (user_id := session.scalar(select(User.id).where(User.email == f"{local}@{domain}")))
+        if (
+            user_id := session.scalar(
+                select(User.id).where(User.email == f"{local}@{domain}", User.google_sub.is_(None))
+            )
+        )
         is not None
     }
     owner_id = people.get(SEED_PEOPLE[0][1])
@@ -136,7 +145,18 @@ def _seed_content(session: Session, domain: str) -> tuple[int, int] | None:
         return None
     board_id = session.scalar(
         select(Board.id)
-        .where(Board.name == SEED_BOARD, Board.archived_at.is_(None), Board.created_by == owner_id)
+        .join(
+            Event,
+            (Event.subject_type == "board")
+            & (Event.subject_id == cast(Board.id, String))
+            & (Event.kind == "board.created"),
+        )
+        .where(
+            Board.name == SEED_BOARD,
+            Board.archived_at.is_(None),
+            Board.created_by == owner_id,
+            Event.actor_id.is_(None),
+        )
         .order_by(Board.id)
     )
     if board_id is None:
@@ -214,6 +234,13 @@ def cmd_seed(_args: argparse.Namespace) -> int:
             content = _seed_content(session, domain)
     except IntegrityError:
         return _concurrent_change()
+    except BoardChanged:
+        print(
+            f"error: the board {SEED_BOARD!r} changed while seeding; "
+            "some lists or cards may be written, check the board",
+            file=sys.stderr,
+        )
+        return 1
     finally:
         engine.dispose()
     print(f"seeded {added} new member(s)")

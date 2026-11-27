@@ -2,16 +2,17 @@
 
 import dataclasses
 from collections import Counter
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import TypeAdapter
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from taskboard import cli, seed
 from taskboard.boards import BoardName
 from taskboard.card_fields import CardTitle, visible_tiles
-from taskboard.comments import _clean_comment
+from taskboard.comments import _FEED_KINDS, _clean_comment
 from taskboard.db import make_engine
 from taskboard.markdown import clean_markdown
 from taskboard.models import (
@@ -163,10 +164,61 @@ def test_every_change_has_one_event_in_the_same_transaction(migrated):
     assert all(e.board_id == board.id and e.actor_id is None for e in content)
     comment_events = [e for e in content if e.kind == "comment.added"]
     comment_ids = [c.id for c in rows(migrated, Comment)]
-    assert [set(e.data) for e in comment_events] == [{"key", "comment_id"}] * len(comment_events)
     assert sorted(e.data["comment_id"] for e in comment_events) == comment_ids
     card_events = [e for e in content if e.kind == "card.created"]
     assert [e.data["key"] for e in card_events] == [f"TB-{n}" for n in range(1, 10)]
+    # Each kind carries exactly the keys the feed allow-list sends on, no more, no fewer.
+    for e in content:
+        if e.kind == "list.created":
+            allowed = {"name"}
+        elif e.kind == "comment.added":
+            allowed = {"key", "comment_id"}
+        else:
+            allowed = set(_FEED_KINDS[e.kind])
+        assert set(e.data) == allowed, e.kind
+
+
+def test_every_row_matches_the_sample(migrated):
+    today = datetime.now(UTC).date()
+    assert cli.main(["seed"]) == 0
+
+    def read(s):
+        emails = {u.id: u.email.split("@")[0] for u in s.scalars(select(User))}
+        got = {}
+        for card in s.scalars(select(Card).order_by(Card.id)):
+            people = {
+                emails[m.user_id]
+                for m in s.scalars(select(CardMember).where(CardMember.card_id == card.id))
+            }
+            items = [
+                (i.text, i.done)
+                for i in s.scalars(
+                    select(ChecklistItem)
+                    .where(ChecklistItem.card_id == card.id)
+                    .order_by(ChecklistItem.id)
+                )
+            ]
+            notes = [
+                (emails[c.author_id], c.text)
+                for c in s.scalars(
+                    select(Comment).where(Comment.card_id == card.id).order_by(Comment.id)
+                )
+            ]
+            due = (card.due_at.date() - today).days if card.due_at else None
+            got[card.title] = (people, due, card.description, items, notes)
+        return got
+
+    want = {
+        c.title: (
+            set(c.people),
+            c.due_in_days,
+            c.description,
+            [(i.text, i.done) for i in c.checklist],
+            [(n.author, n.text) for n in c.comments],
+        )
+        for c in sample_cards()
+    }
+    assert query(migrated, read) == want
 
 
 def test_a_failing_content_write_leaves_rows_and_events_matching(migrated, monkeypatch):
@@ -291,6 +343,196 @@ def test_the_sample_is_invented_and_valid():
                 assert clean_markdown(card.description) == card.description
             for comment in card.comments:
                 assert _clean_comment(comment.text) == comment.text
+
+
+def empty_seed_board(monkeypatch):
+    """Run the seed with no sample lists: the five people and an untouched board."""
+    with monkeypatch.context() as m:
+        m.setattr(seed, "SAMPLE", dataclasses.replace(seed.SAMPLE, lists=()))
+        assert cli.main(["seed"]) == 0
+
+
+def sign_in(db_url, local):
+    def go(s):
+        s.execute(
+            update(User)
+            .where(User.email == f"{local}@example.com")
+            .values(google_sub=f"sub-{local}")
+        )
+        s.commit()
+
+    query(db_url, go)
+
+
+def own_empty_board(db_url, *, signed_in, actor_is_owner):
+    """linh.tran with her own empty 'Office move' board, as a person would make through the app."""
+
+    def make(s):
+        s.add(
+            User(
+                id=1,
+                email="linh.tran@example.com",
+                google_sub="sub-linh" if signed_in else None,
+            )
+        )
+        s.flush()
+        board = Board(name="Office move", visibility="private", created_by=1)
+        s.add(board)
+        s.flush()
+        s.add(BoardMember(board_id=board.id, user_id=1, role="owner"))
+        s.add(
+            Event(
+                actor_id=1 if actor_is_owner else None,
+                kind="board.created",
+                subject_type="board",
+                subject_id=str(board.id),
+                data={},
+                board_id=board.id,
+            )
+        )
+        s.commit()
+
+    query(db_url, make)
+
+
+def test_a_signed_in_owners_empty_board_gets_nothing(migrated):
+    own_empty_board(migrated, signed_in=True, actor_is_owner=True)
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, BoardList) == 0
+    assert count(migrated, Card) == 0
+    assert kinds(migrated)["list.created"] == 0
+
+
+def test_a_pending_owners_own_board_gets_nothing(migrated):
+    own_empty_board(migrated, signed_in=False, actor_is_owner=True)
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, BoardList) == 0
+    assert count(migrated, Card) == 0
+
+
+def test_a_signed_in_owner_gets_nothing_even_on_a_cli_board(migrated):
+    own_empty_board(migrated, signed_in=True, actor_is_owner=False)
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, BoardList) == 0
+    assert count(migrated, Card) == 0
+
+
+def test_a_signed_in_seed_person_is_skipped(migrated, monkeypatch):
+    empty_seed_board(monkeypatch)
+    sign_in(migrated, "minh.pham")
+    minh = query(migrated, lambda s: s.scalar(select(User.id).where(User.google_sub.is_not(None))))
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, Card) == 9
+    assert (
+        query(migrated, lambda s: s.scalar(select(func.count()).where(CardMember.user_id == minh)))
+        == 0
+    )
+    assert (
+        query(migrated, lambda s: s.scalar(select(func.count()).where(Comment.author_id == minh)))
+        == 0
+    )
+    assert all(
+        e.data["user_id"] != minh for e in rows(migrated, Event) if e.kind == "card.member_added"
+    )
+    # Card 1 keeps its other assignee and its comments from the others.
+    comments = [c.text for c in rows(migrated, Comment)]
+    assert len(comments) == sum(
+        1 for c in sample_cards() for n in c.comments if n.author != "minh.pham"
+    )
+
+
+def test_a_seed_person_no_longer_on_the_board_is_skipped(migrated, monkeypatch):
+    empty_seed_board(monkeypatch)
+
+    def leave(s):
+        minh = s.scalar(select(User.id).where(User.email == "minh.pham@example.com"))
+        s.execute(delete(BoardMember).where(BoardMember.user_id == minh))
+        s.commit()
+        return minh
+
+    minh = query(migrated, leave)
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, Card) == 9
+    assert (
+        query(migrated, lambda s: s.scalar(select(func.count()).where(CardMember.user_id == minh)))
+        == 0
+    )
+    assert (
+        query(migrated, lambda s: s.scalar(select(func.count()).where(Comment.author_id == minh)))
+        == 0
+    )
+    assert all(
+        e.data["user_id"] != minh for e in rows(migrated, Event) if e.kind == "card.member_added"
+    )
+
+
+def test_the_race_guard_adds_nothing_when_a_list_appears(migrated, monkeypatch):
+    empty_seed_board(monkeypatch)
+    board = board_of(migrated)
+
+    def add_list(s):
+        s.add(BoardList(board_id=board.id, name="Mine", position=1.0, created_by=board.created_by))
+        s.commit()
+
+    query(migrated, add_list)
+    before = snapshot(migrated)
+    monkeypatch.setattr(seed, "_is_empty", lambda session, board_id: True)
+
+    result = query(migrated, lambda s: seed.seed_board_content(s, board.id, board.created_by, {}))
+
+    assert result is None
+    assert snapshot(migrated) == before
+
+
+def test_a_board_archived_before_the_first_list_gets_nothing(migrated, monkeypatch, capsys):
+    empty_seed_board(monkeypatch)
+    board = board_of(migrated)
+    before = snapshot(migrated)
+
+    def archive(session, board_id):
+        session.execute(update(Board).values(archived_at=datetime.now(UTC)))
+        session.commit()
+        return True
+
+    monkeypatch.setattr(seed, "_is_empty", archive)
+    capsys.readouterr()
+
+    assert cli.main(["seed"]) == 0
+
+    assert count(migrated, BoardList) == 0
+    assert snapshot(migrated)["events"] == before["events"]
+    assert board.id == board_of(migrated).id
+
+
+def test_a_board_archived_halfway_ends_with_a_clean_error(migrated, monkeypatch, capsys):
+    empty_seed_board(monkeypatch)
+    real = seed._add_card
+
+    def archive_then_add(session, board_id, owner_id, list_id, title):
+        session.execute(update(Board).values(archived_at=datetime.now(UTC)))
+        session.commit()
+        return real(session, board_id, owner_id, list_id, title)
+
+    monkeypatch.setattr(seed, "_add_card", archive_then_add)
+    capsys.readouterr()
+
+    assert cli.main(["seed"]) == 1
+
+    err = capsys.readouterr().err
+    assert err.startswith("error: the board 'Office move' changed while seeding")
+    assert "Traceback" not in err
+    assert count(migrated, Card) == 0
+    assert kinds(migrated)["list.created"] == count(migrated, BoardList) == 1
 
 
 def test_first_run_prints_what_it_added(migrated, capsys):

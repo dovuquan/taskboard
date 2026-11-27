@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import func, insert, select, update
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from taskboard.card_fields import ASSIGNABLE_ROLES
 from taskboard.cards import _bump_counter, _new_number
 from taskboard.events import record_change
 from taskboard.models import (
+    Board,
     BoardList,
     BoardMember,
     Card,
@@ -217,6 +219,17 @@ def _member_ids(session: Session, board_id: int, people: dict[str, int]) -> dict
 
 def _add_list(session: Session, board_id: int, owner_id: int, name: str, first: bool) -> int:
     def change(s: Session) -> int:
+        if first and (
+            s.scalar(
+                select(Board.id).where(
+                    Board.id == board_id,
+                    Board.archived_at.is_(None),
+                    Board.created_by == owner_id,
+                )
+            )
+            is None
+        ):
+            raise BoardChanged
         end = (
             select(func.coalesce(func.max(BoardList.position), 0.0) + 1)
             .where(BoardList.board_id == board_id)
@@ -411,8 +424,12 @@ def seed_board_content(
                 card_id, key = _add_card(session, board_id, owner_id, list_id, sample.title)
                 cards += 1
                 _fill_card(session, board_id, owner_id, card_id, key, sample, members, today)
-    except BoardChanged:
-        return None
+    except (BoardChanged, HTTPException) as error:
+        if isinstance(error, HTTPException) and error.detail != "board_not_found":
+            raise
+        if not lists:
+            return None  # the very first list was refused: nothing was written
+        raise BoardChanged from error  # archived or changed halfway: cmd_seed reports it
     return lists, cards
 
 
