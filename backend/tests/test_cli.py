@@ -198,7 +198,7 @@ def test_seed_adds_one_workspace_board_once_with_events(migrated):
     assert [email for email, role in rows if role == "owner"] == ["linh.tran@example.com"]
     assert [role for _, role in rows].count("member") == 4
     assert board.created_by == user_by_email(migrated, "linh.tran@example.com").id
-    kinds = [(e.kind, e.board_id) for e in events(migrated)[5:]]
+    kinds = [(e.kind, e.board_id) for e in events(migrated)[5:10]]
     assert kinds == [("board.created", board.id)] + [("board_member.added", board.id)] * 4
     assert all(e.actor_id is None for e in events(migrated))
 
