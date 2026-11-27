@@ -21,7 +21,8 @@ Released at gate G1 on 20 Nov 2026: pull request #46, merge commit 356c39e, tag 
   sign-ins feed (T6 #11).
 - Sign in, Sign-in refused, the app bar with Sign out, the Boards empty state and Workspace members
   screens, in light and dark (T7 #12, T8 #13, #42).
-- Follow-ups from the per-ticket reviews: #22, #23, #27–#31, #33, #43.
+- Fixes from the per-ticket reviews: #22, #27–#31, #33. Other follow-ups: #23 (issue links in
+  commits and pull requests), #43 (G1 sign-in screenshots).
 
 ### Checks
 
@@ -44,7 +45,7 @@ Run on `dev` at 77bb29f on 20 Nov 2026.
 
 ### Differences from the prototype
 
-The T1–T8 rows of [assumptions.md](assumptions.md).
+The T1–T8 and #33 rows of [assumptions.md](assumptions.md).
 
 ### Not verified
 
@@ -52,7 +53,8 @@ Nothing left open at G1.
 
 ## M2 Boards
 
-Released at gate G2 on 27 Nov 2026: pull request #57, merge commit 978105b.
+Released at gate G2 on 27 Nov 2026: pull request #57, merge commit 978105b, tag `m2` (set by the
+owner).
 
 ### Built
 
@@ -92,7 +94,7 @@ Run on `dev` at 16c6ccc on 27 Nov 2026.
 
 ### Differences from the prototype
 
-The T9–T18 rows of [assumptions.md](assumptions.md). The largest:
+The T9–T14 and T17 rows of [assumptions.md](assumptions.md). The largest:
 
 - The activity feed is per card; board and list events are stored in `events` but shown in no feed
   (T13 row).
