@@ -144,7 +144,7 @@ export function ArchivedView({
           <>
             <h2>Can't reach Taskboard</h2>
             <p>
-              The archived items could not be loaded because Taskboard isn't answering. Check your
+              archived items could not be loaded because Taskboard isn't answering. Check your
               connection, or ask an admin whether the server is running.
             </p>
           </>
@@ -250,14 +250,14 @@ export function Archived({
 
   /** Runs one restore: one at a time, the screen changes only when the server has answered. */
   async function restore<T>(
-    call: Promise<{ kind: "ok"; data: T } | { kind: string }>,
+    call: () => Promise<{ kind: "ok"; data: T } | { kind: string }>,
     okText: (data: T) => Promise<string>,
   ) {
     if (working.current) return;
     working.current = true;
     setBusy(true);
     try {
-      const res = await call;
+      const res = await call();
       if (res.kind === "ok") {
         const text = await okText((res as { kind: "ok"; data: T }).data);
         if (await fetchAll()) show(text);
@@ -295,16 +295,22 @@ export function Archived({
       busy={busy}
       message={message}
       onRestoreList={(list) =>
-        void restore(restoreList(id, list.id), async () => restoredListText(list.name, list.card_count))
+        void restore(
+          () => restoreList(id, list.id),
+          async () => restoredListText(list.name, list.card_count),
+        )
       }
       onRestoreCard={(card) =>
-        void restore(restoreCard(id, card.id), async (tile) => {
-          // The card goes back to its own list unless that is archived: ask for the list's name.
-          const lists = await getLists(id);
-          const where =
-            lists.kind === "ok" ? lists.data.find((l) => l.id === tile.list_id)?.name : undefined;
-          return restoredCardText(card.key, where ?? card.list_name);
-        })
+        void restore(
+          () => restoreCard(id, card.id),
+          async (tile) => {
+            // The card goes back to its own list unless that is archived: ask for the list's name.
+            const lists = await getLists(id);
+            const where =
+              lists.kind === "ok" ? lists.data.find((l) => l.id === tile.list_id)?.name : undefined;
+            return restoredCardText(card.key, where ?? card.list_name);
+          },
+        )
       }
       onRetry={() => setAttempt((n) => n + 1)}
     />

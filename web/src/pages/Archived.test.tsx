@@ -1,5 +1,6 @@
+import { type ReactNode, isValidElement } from "react";
 import { renderToString } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Archived } from "../api";
 import { ArchivedView } from "./Archived";
@@ -53,6 +54,26 @@ function render(over: Partial<Props> = {}) {
   return { html, text };
 }
 
+const baseProps: Props = {
+  state: "ready",
+  boardId: 7,
+  boardName: "Office move",
+  owner: true,
+  data: full,
+  now: NOW,
+};
+
+/** Walks an element tree and lists every key that appears twice among the same siblings. */
+function repeatedKeys(node: ReactNode): string[] {
+  if (Array.isArray(node)) {
+    const keys = node.flatMap((n) => (isValidElement(n) && n.key !== null ? [n.key] : []));
+    const repeats = keys.filter((k, i) => keys.indexOf(k) !== i);
+    return [...repeats, ...node.flatMap(repeatedKeys)];
+  }
+  if (!isValidElement<{ children?: ReactNode }>(node)) return [];
+  return repeatedKeys(node.props.children);
+}
+
 describe("ArchivedView head", () => {
   it("names the board and says what is kept", () => {
     const { html, text } = render();
@@ -101,8 +122,21 @@ describe("ArchivedView rows", () => {
         },
       ],
     };
-    const { html } = render({ data: clash });
-    expect(html).toContain("Same id");
+    const twice: Archived = {
+      lists: [...clash.lists, { ...clash.lists[0], id: 6 }],
+      cards: [...clash.cards, { ...clash.cards[0], id: 6, key: "TB-10" }],
+    };
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { html } = render({ data: twice });
+      expect(html).toContain("Same id");
+      // renderToString only warns about a missing key, and never about a repeated one.
+      const keyWarnings = spy.mock.calls.filter((args) => String(args[0]).includes("key"));
+      expect(keyWarnings).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(repeatedKeys(ArchivedView({ ...baseProps, data: twice }))).toEqual([]);
   });
 });
 
@@ -155,7 +189,11 @@ describe("ArchivedView states", () => {
     const { html, text } = render({ state: "server", data: null });
     expect(text).toContain("Couldn't load archived items");
     expect(html).toMatch(/<button[^>]*>Try again<\/button>/);
-    expect(render({ state: "network", data: null }).text).toContain("Can't reach Taskboard");
+    const network = render({ state: "network", data: null }).text;
+    expect(network).toContain("Can't reach Taskboard");
+    expect(network).toContain(
+      "archived items could not be loaded because Taskboard isn't answering. Check your connection, or ask an admin whether the server is running.",
+    );
   });
 
   it("renders the toast", () => {

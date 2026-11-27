@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   type ArchivedBoard,
@@ -43,6 +43,7 @@ type ViewProps = {
   onCreate?: () => void;
   onTake?: (id: number) => void;
   onRestore?: (id: number) => void;
+  onUndo?: (() => void) | null;
   onRetry?: () => void;
 };
 
@@ -143,7 +144,7 @@ function NewBoardForm({ form, onName, onPriv, onCreate, onCancelForm }: Pick<
 
 export function BoardsView(props: ViewProps) {
   const { state, tiles, ownerless, admin, domain, memberCount, now, form, message, busy } = props;
-  const { onOpenForm, onTake, onRestore, onRetry } = props;
+  const { onOpenForm, onTake, onRestore, onUndo, onRetry } = props;
   const archived = props.archived ?? [];
   const solo = memberCount === 1;
 
@@ -258,7 +259,7 @@ export function BoardsView(props: ViewProps) {
           </section>
         )}
       </div>
-      <Toast message={message} />
+      <Toast message={message} onUndo={onUndo} />
     </>
   );
 }
@@ -291,7 +292,9 @@ export function Boards({
   const [attempt, setAttempt] = useState(0);
   const [form, setForm] = useState<Form>({ open: false, name: "", priv: false, saving: false });
   const [busy, setBusy] = useState(false);
-  const [message, show] = useToast();
+  const [message, show, undo] = useToast();
+  // The handoff Undo is set once, so it reads the current `busy` through a ref.
+  const busyNow = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -353,9 +356,11 @@ export function Boards({
   }
 
   async function onTake(id: number) {
-    if (busy) return;
+    if (busyNow.current) return;
+    busyNow.current = true;
     setBusy(true);
     const res = await takeOwnership(id);
+    busyNow.current = false;
     setBusy(false);
     if (res.kind === "ok") {
       show(`You now own ${res.data.name}`);
@@ -378,9 +383,11 @@ export function Boards({
   }, []);
 
   async function onRestore(id: number) {
-    if (busy) return;
+    if (busyNow.current) return;
+    busyNow.current = true;
     setBusy(true);
     const res = await restoreBoard(id);
+    busyNow.current = false;
     setBusy(false);
     if (res.kind === "ok") {
       show(restoredBoardText(res.data.name));
@@ -416,6 +423,7 @@ export function Boards({
       onCreate={() => void onCreate()}
       onTake={(id) => void onTake(id)}
       onRestore={(id) => void onRestore(id)}
+      onUndo={undo}
       onRetry={onRetry}
     />
   );

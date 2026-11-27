@@ -250,4 +250,15 @@ describe("BoardsView toast", () => {
     const { html } = render({ tiles: [tile()], message: "Created Q4 Launch" });
     expect(html).toContain('<div class="toast" role="status"><span>Created Q4 Launch</span></div>');
   });
+
+  it("shows an Undo button when the toast carries an undo", () => {
+    const { html } = render({
+      tiles: [tile()],
+      message: "Archived Office move. Nothing is deleted.",
+      onUndo: () => {},
+    });
+    expect(html).toContain(
+      '<div class="toast" role="status"><span>Archived Office move. Nothing is deleted.</span><button type="button">Undo</button></div>',
+    );
+  });
 });
