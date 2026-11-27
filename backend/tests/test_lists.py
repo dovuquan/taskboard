@@ -467,6 +467,47 @@ def test_restore_returns_the_list_to_its_old_place_with_an_event(as_user, db_url
     assert event.data == {"name": "B"}
 
 
+def test_archiving_a_list_hides_its_cards_everywhere_and_restore_brings_them_back(as_user, db_url):
+    client, _ada, board_id = board_with(as_user, db_url, "owner")
+    first = add_list(db_url, board_id, "First", 1.0)
+    other = add_list(db_url, board_id, "Other", 2.0)
+    # Positions run opposite to ids, so only stored positions give the expected order.
+    created = [add_card(db_url, board_id, first, f"C{i}", float(4 - i)) for i in range(1, 4)]
+    mine = list(reversed(created))
+    theirs = [add_card(db_url, board_id, other, "Solo", 1.0)]
+    cards_url = f"/api/boards/{board_id}/cards"
+
+    def ids_by_list():
+        response = client.get(cards_url)
+        assert response.status_code == 200, response.text
+        return {
+            lid: [c["id"] for c in response.json() if c["list_id"] == lid] for lid in (first, other)
+        }
+
+    assert ids_by_list() == {first: mine, other: theirs}
+    before = len(events(db_url))
+
+    assert client.post(url(board_id, first, "archive")).status_code == 200
+
+    assert ids_by_list() == {first: [], other: theirs}
+    gone = client.get(f"{cards_url}/{mine[0]}")
+    assert gone.status_code == 404
+    assert gone.json() == {"detail": "card_not_found"}
+    archived = client.get(f"/api/boards/{board_id}/archived").json()
+    assert [(r["id"], r["card_count"]) for r in archived["lists"]] == [(first, 3)]
+    assert archived["cards"] == []
+
+    assert client.post(url(board_id, first, "restore")).status_code == 200
+
+    assert ids_by_list() == {first: mine, other: theirs}
+    for card_id in mine:
+        detail = client.get(f"{cards_url}/{card_id}")
+        assert detail.status_code == 200
+        assert (detail.json()["id"], detail.json()["list_id"]) == (card_id, first)
+    assert client.get(f"/api/boards/{board_id}/archived").json()["lists"] == []
+    assert [e.kind for e in events(db_url)[before:]] == ["list.archived", "list.restored"]
+
+
 def test_restoring_a_list_that_is_not_archived_is_not_found(as_user, db_url):
     client, _ada, board_id = board_with(as_user, db_url, "owner")
     list_id = add_list(db_url, board_id, "A", 1.0)
