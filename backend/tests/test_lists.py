@@ -471,7 +471,9 @@ def test_archiving_a_list_hides_its_cards_everywhere_and_restore_brings_them_bac
     client, _ada, board_id = board_with(as_user, db_url, "owner")
     first = add_list(db_url, board_id, "First", 1.0)
     other = add_list(db_url, board_id, "Other", 2.0)
-    mine = [add_card(db_url, board_id, first, f"C{i}", float(i)) for i in range(1, 4)]
+    # Positions run opposite to ids, so only stored positions give the expected order.
+    created = [add_card(db_url, board_id, first, f"C{i}", float(4 - i)) for i in range(1, 4)]
+    mine = list(reversed(created))
     theirs = [add_card(db_url, board_id, other, "Solo", 1.0)]
     cards_url = f"/api/boards/{board_id}/cards"
 
@@ -483,7 +485,7 @@ def test_archiving_a_list_hides_its_cards_everywhere_and_restore_brings_them_bac
         }
 
     assert ids_by_list() == {first: mine, other: theirs}
-    keys = {c["id"]: c["key"] for c in client.get(cards_url).json()}
+    before = len(events(db_url))
 
     assert client.post(url(board_id, first, "archive")).status_code == 200
 
@@ -494,17 +496,16 @@ def test_archiving_a_list_hides_its_cards_everywhere_and_restore_brings_them_bac
     archived = client.get(f"/api/boards/{board_id}/archived").json()
     assert [(r["id"], r["card_count"]) for r in archived["lists"]] == [(first, 3)]
     assert archived["cards"] == []
-    before = len(events(db_url))
 
     assert client.post(url(board_id, first, "restore")).status_code == 200
 
     assert ids_by_list() == {first: mine, other: theirs}
-    assert [c["key"] for c in client.get(cards_url).json() if c["list_id"] == first] == [
-        keys[i] for i in mine
-    ]
-    assert client.get(f"{cards_url}/{mine[0]}").status_code == 200
+    for card_id in mine:
+        detail = client.get(f"{cards_url}/{card_id}")
+        assert detail.status_code == 200
+        assert (detail.json()["id"], detail.json()["list_id"]) == (card_id, first)
     assert client.get(f"/api/boards/{board_id}/archived").json()["lists"] == []
-    assert [e.kind for e in events(db_url)[before:]] == ["list.restored"]
+    assert [e.kind for e in events(db_url)[before:]] == ["list.archived", "list.restored"]
 
 
 def test_restoring_a_list_that_is_not_archived_is_not_found(as_user, db_url):
