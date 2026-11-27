@@ -4,12 +4,16 @@ import { type Me, signOut } from "../api";
 import { type MenuEvent, menuAfter, signOutAndLeave } from "../auth/signOut";
 import { Avatar } from "./Avatar";
 import { BrandMark } from "./BrandMark";
+import { Link } from "./Link";
 
-type Screen = "boards" | "members";
+type Screen = "boards" | "members" | "board" | "archived";
 
 type AppBarViewProps = {
   user: Me;
   screen: Screen;
+  boardName?: string | null;
+  /** The board whose Archived view this is; the crumb for its name links back to it. */
+  boardId?: number | null;
   open: boolean;
   onToggle: () => void;
   onSignOut: () => void;
@@ -21,6 +25,8 @@ type AppBarViewProps = {
 export function AppBarView({
   user,
   screen,
+  boardName,
+  boardId,
   open,
   onToggle,
   onSignOut,
@@ -31,22 +37,44 @@ export function AppBarView({
   const label = user.name ?? user.email;
   return (
     <header className="appbar gutter">
-      <a className="brand" href="/boards">
+      <Link className="brand" to="/boards">
         <BrandMark />
         Taskboard
-      </a>
+      </Link>
       <nav className="crumbs" aria-label="Breadcrumb">
         <span>/</span>
-        <span>{screen === "members" ? "Members" : "Boards"}</span>
+        {screen === "board" || screen === "archived" ? (
+          <>
+            <Link to="/boards">Boards</Link>
+            {boardName && (
+              <>
+                <span>/</span>
+                {screen === "archived" && boardId != null ? (
+                  <Link to={`/boards/${boardId}`}>{boardName}</Link>
+                ) : (
+                  <span>{boardName}</span>
+                )}
+              </>
+            )}
+            {screen === "archived" && (
+              <>
+                <span>/</span>
+                <span>Archived</span>
+              </>
+            )}
+          </>
+        ) : (
+          <span>{screen === "members" ? "Members" : "Boards"}</span>
+        )}
       </nav>
       <span className="spacer"></span>
-      <a className={screen === "boards" ? "navlink on" : "navlink"} href="/boards">
+      <Link className={screen === "members" ? "navlink" : "navlink on"} to="/boards">
         Boards
-      </a>
+      </Link>
       {user.role === "admin" && (
-        <a className={screen === "members" ? "navlink on" : "navlink"} href="/members">
+        <Link className={screen === "members" ? "navlink on" : "navlink"} to="/members">
           Members
-        </a>
+        </Link>
       )}
       <span className="me-wrap" ref={menuRef}>
         <button
@@ -77,7 +105,17 @@ export function AppBarView({
   );
 }
 
-export function AppBar({ user, screen = "boards" }: { user: Me; screen?: Screen }) {
+export function AppBar({
+  user,
+  screen = "boards",
+  boardName,
+  boardId,
+}: {
+  user: Me;
+  screen?: Screen;
+  boardName?: string | null;
+  boardId?: number | null;
+}) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLSpanElement>(null);
@@ -108,6 +146,8 @@ export function AppBar({ user, screen = "boards" }: { user: Me; screen?: Screen 
     <AppBarView
       user={user}
       screen={screen}
+      boardName={boardName}
+      boardId={boardId}
       open={open}
       onToggle={() => send("toggle")}
       onSignOut={() => {

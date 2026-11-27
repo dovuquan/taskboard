@@ -2,12 +2,20 @@ import { useEffect, useState } from "react";
 
 import { type Me, type MeResult, getConfig, getMe, getMemberCount } from "./api";
 import { AppBar } from "./components/AppBar";
+import { Archived } from "./pages/Archived";
+import { Board } from "./pages/Board";
 import { Boards } from "./pages/Boards";
 import { Expired } from "./pages/Expired";
 import { Members } from "./pages/Members";
 import { Refused } from "./pages/Refused";
 import { SignIn } from "./pages/SignIn";
-import { type Screen, needsMemberCount, resolveScreen } from "./routes";
+import {
+  type Screen,
+  boardIdFromPath,
+  cardKeyFromPath,
+  needsMemberCount,
+  resolveScreen,
+} from "./routes";
 
 type AppViewProps = {
   screen: Screen;
@@ -15,14 +23,35 @@ type AppViewProps = {
   reason: string | null;
   user: Me | null;
   memberCount: number | null;
+  boardId?: number | null;
+  cardKey?: string | null;
+  boardName?: string | null;
+  onBoardName?: (name: string | null) => void;
 };
 
+function barScreen(screen: Screen): "boards" | "members" | "board" | "archived" | null {
+  switch (screen) {
+    case "boards":
+    case "members":
+      return screen;
+    case "board-archived":
+      return "archived";
+    case "board":
+    case "board-settings":
+    case "board-card":
+      return "board";
+    default:
+      return null;
+  }
+}
+
 export function AppView(props: AppViewProps) {
-  const { screen, user } = props;
+  const { screen, user, boardName, boardId } = props;
+  const bar = barScreen(screen);
   return (
     <>
-      {(screen === "boards" || screen === "members") && user && (
-        <AppBar user={user} screen={screen} />
+      {bar && user && (
+        <AppBar user={user} screen={bar} boardName={boardName} boardId={boardId} />
       )}
       <main id="screen">
         <Screen {...props} />
@@ -31,7 +60,16 @@ export function AppView(props: AppViewProps) {
   );
 }
 
-function Screen({ screen, domain, reason, memberCount, user }: AppViewProps) {
+function Screen({
+  screen,
+  domain,
+  reason,
+  memberCount,
+  user,
+  boardId,
+  cardKey,
+  onBoardName,
+}: AppViewProps) {
   switch (screen) {
     case "signin":
       return <SignIn domain={domain} />;
@@ -40,9 +78,26 @@ function Screen({ screen, domain, reason, memberCount, user }: AppViewProps) {
     case "expired":
       return <Expired />;
     case "boards":
+      return user && <Boards me={user} domain={domain} memberCount={memberCount} />;
+    case "board":
+    case "board-settings":
+    case "board-card":
+      // The three share one element, so opening a card or the settings never remounts the board.
       return (
-        <Boards domain={domain} memberCount={memberCount} />
+        user &&
+        boardId != null && (
+          <Board
+            id={boardId}
+            settings={screen === "board-settings"}
+            cardKey={screen === "board-card" ? (cardKey ?? null) : null}
+            me={user}
+            domain={domain}
+            onBoardName={onBoardName}
+          />
+        )
       );
+    case "board-archived":
+      return user && boardId != null && <Archived id={boardId} onBoardName={onBoardName} />;
     case "members":
       return user && <Members me={user} domain={domain} />;
     case "error":
@@ -63,10 +118,18 @@ function Screen({ screen, domain, reason, memberCount, user }: AppViewProps) {
   }
 }
 
-type Loaded = AppViewProps | null;
+type Boot = {
+  domain: string | null;
+  me: MeResult["kind"];
+  user: Me | null;
+  reason: string | null;
+};
 
 export function App() {
-  const [state, setState] = useState<Loaded>(null);
+  const [boot, setBoot] = useState<Boot | null>(null);
+  const [path, setPath] = useState(window.location.pathname);
+  const [boardName, setBoardName] = useState<string | null>(null);
+  const [memberCount, setMemberCount] = useState<number | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -74,14 +137,51 @@ export function App() {
       const [domain, me]: [string | null, MeResult] = await Promise.all([getConfig(), getMe()]);
       const user = me.kind === "user" ? me.user : null;
       const screen = resolveScreen(window.location.pathname, me.kind);
-      const memberCount = user && needsMemberCount(screen) ? await getMemberCount() : null;
+      const count = user && needsMemberCount(screen) ? await getMemberCount() : null;
       const reason = new URLSearchParams(window.location.search).get("reason");
-      if (live) setState({ screen, domain, reason, user, memberCount });
+      if (!live) return;
+      setMemberCount(count);
+      setBoot({ domain, me: me.kind, user, reason });
     })();
     return () => {
       live = false;
     };
   }, []);
 
-  return state ? <AppView {...state} /> : null;
+  // Links call `navigate`, which pushes history and fires `popstate`; Back and Forward do too.
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const screen = boot ? resolveScreen(path, boot.me) : null;
+  const wantsCount = boot?.user != null && screen !== null && needsMemberCount(screen);
+
+  // Coming back to Boards after the first screen was something else: the count is still unknown.
+  useEffect(() => {
+    if (!wantsCount || memberCount !== null) return;
+    let live = true;
+    void getMemberCount().then((n) => {
+      if (live) setMemberCount(n);
+    });
+    return () => {
+      live = false;
+    };
+  }, [wantsCount, memberCount]);
+
+  if (!boot || !screen) return null;
+  return (
+    <AppView
+      screen={screen}
+      domain={boot.domain}
+      reason={boot.reason}
+      user={boot.user}
+      memberCount={memberCount}
+      boardId={boardIdFromPath(path)}
+      cardKey={cardKeyFromPath(path)}
+      boardName={boardName}
+      onBoardName={setBoardName}
+    />
+  );
 }

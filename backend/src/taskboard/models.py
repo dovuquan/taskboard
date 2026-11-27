@@ -1,8 +1,21 @@
-"""SQLAlchemy models for the M1 tables."""
+"""SQLAlchemy models for the M1 tables and the boards."""
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, ForeignKey, Integer, String
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -59,6 +72,7 @@ class AuthEvent(Base):
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = (Index("ix_events_subject", "subject_type", "subject_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -67,3 +81,126 @@ class Event(Base):
     subject_type: Mapped[str] = mapped_column(String)
     subject_id: Mapped[str] = mapped_column(String)
     data: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Set for events that belong to a board; a plain number, not a key, so the log outlives it.
+    board_id: Mapped[int | None] = mapped_column(Integer, index=True)
+
+
+class Board(Base):
+    __tablename__ = "boards"
+    __table_args__ = (
+        CheckConstraint("visibility IN ('workspace', 'private')", name="ck_board_visibility"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80))
+    visibility: Mapped[str] = mapped_column(String)
+    key_prefix: Mapped[str] = mapped_column(String, default="TB", server_default="TB")
+    next_card_number: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class BoardMember(Base):
+    __tablename__ = "board_members"
+    __table_args__ = (
+        CheckConstraint("role IN ('owner', 'member', 'observer')", name="ck_board_member_role"),
+    )
+
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    role: Mapped[str] = mapped_column(String)
+    added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class BoardList(Base):
+    __tablename__ = "lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    # Order on the board; read by (position, id) and never sent to clients.
+    position: Mapped[float] = mapped_column(Float)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+    archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class Card(Base):
+    __tablename__ = "cards"
+    __table_args__ = (UniqueConstraint("board_id", "number", name="uq_cards_board_number"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    board_id: Mapped[int] = mapped_column(ForeignKey("boards.id"), index=True)
+    list_id: Mapped[int] = mapped_column(ForeignKey("lists.id"), index=True)
+    # The board's own running number; the key `TB-<number>` is built, never stored.
+    number: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str | None] = mapped_column(Text)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Order within the list; read by (position, id) and never sent to clients.
+    position: Mapped[float] = mapped_column(Float)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+    archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class Label(Base):
+    """One of the workspace's fixed labels; `color` is the suffix of the `--l-<color>` token."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True)
+    color: Mapped[str] = mapped_column(String)
+
+
+class CardMember(Base):
+    """A person assigned to a card."""
+
+    __tablename__ = "card_members"
+
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
+
+
+class CardLabel(Base):
+    """A label put on a card."""
+
+    __tablename__ = "card_labels"
+
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), primary_key=True)
+    label_id: Mapped[int] = mapped_column(ForeignKey("labels.id"), primary_key=True, index=True)
+
+
+class ChecklistItem(Base):
+    """One line of a card's checklist; read in id order, so a restored item keeps its place."""
+
+    __tablename__ = "checklist_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), index=True)
+    text: Mapped[str] = mapped_column(String(200))
+    done: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # A deleted item stays as a row so Undo can bring it back; clients never see it again.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+
+class Comment(Base):
+    """A comment on a card; its author may change or delete it for 24 hours."""
+
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_id: Mapped[int] = mapped_column(ForeignKey("cards.id"), index=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

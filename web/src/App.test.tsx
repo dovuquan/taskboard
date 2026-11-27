@@ -60,6 +60,24 @@ describe("AppView", () => {
     expect(text(bar)).toBe("Taskboard / Boards Boards Members AL Ann Lee Workspace admin");
   });
 
+  it("renders the board screen with the app bar and a skeleton while it loads", () => {
+    const html = renderToString(
+      <AppView
+        screen="board"
+        domain="example.com"
+        reason={null}
+        user={user}
+        memberCount={2}
+        boardId={7}
+        boardName="Office move"
+      />,
+    );
+    const bar = html.match(/<header[\s\S]*?<\/header>/)?.[0] ?? "";
+    expect(bar).toContain("<span>Office move</span>");
+    expect(html.indexOf("<header")).toBeLessThan(html.indexOf("<main"));
+    expect(html).toContain('aria-busy="true"');
+  });
+
   it("renders the members screen with the app bar outside main", () => {
     const { html, h1, text } = view("members", true);
     expect(h1).toBe("Workspace members");

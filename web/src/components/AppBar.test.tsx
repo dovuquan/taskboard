@@ -12,8 +12,8 @@ const ann: Me = {
   role: "admin",
 };
 
-function render(user: Me, screen?: "boards" | "members") {
-  const html = renderToString(<AppBar user={user} screen={screen} />);
+function render(user: Me, screen?: "boards" | "members" | "board", boardName?: string | null) {
+  const html = renderToString(<AppBar user={user} screen={screen} boardName={boardName} />);
   const text = html
     .replace(/<[^>]*>/g, " ")
     .replace(/&#x27;/g, "'")
@@ -77,6 +77,36 @@ describe("AppBar", () => {
     expect(html).toContain(
       '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><span>Members</span></nav>',
     );
+  });
+
+  it("shows Boards / {name} on a board, with Boards linking back", () => {
+    const { html } = render(ann, "board", "Office move");
+    expect(html).toContain(
+      '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><a href="/boards">Boards</a><span>/</span><span>Office move</span></nav>',
+    );
+    expect(html).toContain('<a class="navlink on" href="/boards">Boards</a>');
+  });
+
+  it("shows Boards / {name} / Archived on the Archived view, with the name linking back", () => {
+    const html = renderToString(
+      <AppBar user={ann} screen="archived" boardName="Office move" boardId={7} />,
+    );
+    expect(html).toContain(
+      '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><a href="/boards">Boards</a><span>/</span><a href="/boards/7">Office move</a><span>/</span><span>Archived</span></nav>',
+    );
+    expect(html).toContain('<a class="navlink on" href="/boards">Boards</a>');
+  });
+
+  it("shows just Boards on a board whose name has not loaded", () => {
+    const { html } = render(ann, "board", null);
+    expect(html).toContain(
+      '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><a href="/boards">Boards</a></nav>',
+    );
+  });
+
+  it("escapes a board name in the breadcrumb", () => {
+    const { html } = render(ann, "board", "<b>x</b>");
+    expect(html).toContain("<span>&lt;b&gt;x&lt;/b&gt;</span>");
   });
 
   it("has no shortcuts button yet", () => {

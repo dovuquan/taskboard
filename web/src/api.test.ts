@@ -1,13 +1,55 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  addBoardMember,
+  addCardLabel,
+  addCardMember,
+  addChecklistItem,
+  archiveBoard,
+  archiveCard,
+  archiveList,
+  copyCard,
+  createBoard,
+  createCard,
+  createList,
+  deleteChecklistItem,
+  deleteComment,
+  editComment,
+  getArchived,
+  getArchivedBoards,
+  getBoard,
+  getCard,
+  getCards,
+  getFeed,
+  getLabels,
+  moveCard,
+  patchCard,
+  postComment,
+  removeCardLabel,
+  removeCardMember,
+  getLists,
+  moveList,
+  renameList,
+  restoreBoard,
+  restoreCard,
+  restoreChecklistItem,
+  restoreComment,
+  restoreList,
+  setChecklistItem,
+  getBoardMembers,
+  getBoards,
   getConfig,
   getMe,
   getMemberCount,
   getMembers,
+  getOwnerless,
   getRefused,
+  patchBoard,
+  removeBoardMember,
+  setBoardRole,
   setMemberRole,
   signOut,
+  takeOwnership,
 } from "./api";
 
 const user = {
@@ -251,6 +293,503 @@ describe("getMemberCount", () => {
   });
 });
 
+describe("boards api", () => {
+  const tile = { id: 7, name: "Office move", visibility: "workspace" };
+
+  it("lists boards and sends the session cookie", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [tile]));
+    expect(await getBoards()).toEqual({ kind: "ok", data: [tile] });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("reads the ownerless list and reports 403 as forbidden", async () => {
+    const fetchMock = stubFetch(async () => reply(403, { detail: "forbidden" }));
+    expect(await getOwnerless()).toEqual({ kind: "forbidden" });
+    expect((fetchMock.mock.calls[0] as unknown[])[0]).toBe("/api/boards/ownerless");
+  });
+
+  it("creates a board with a JSON body and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, tile));
+    expect(await createBoard("Office move", "private")).toEqual({ kind: "ok", data: tile });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"name":"Office move","visibility":"private"}');
+  });
+
+  it("patches a board with only the given fields", async () => {
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    await patchBoard(7, { name: "New" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/7");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"name":"New"}');
+  });
+
+  it("adds, re-roles and removes a board member", async () => {
+    const fetchMock = stubFetch(async () => reply(200, {}));
+    await addBoardMember(7, 3);
+    await setBoardRole(7, 3, "owner");
+    stubFetch(async () => new Response(null, { status: 204 }));
+    expect(await removeBoardMember(7, 3)).toEqual({ kind: "ok", data: undefined });
+    const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+    expect(calls[0][0]).toBe("/api/boards/7/members");
+    expect(calls[0][1].body).toBe('{"user_id":3}');
+    expect(calls[1][0]).toBe("/api/boards/7/members/3");
+    expect(calls[1][1].method).toBe("PATCH");
+    expect(calls[1][1].body).toBe('{"role":"owner"}');
+  });
+
+  it("posts take-ownership", async () => {
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    await takeOwnership(9);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/boards/9/take-ownership");
+    expect(init.method).toBe("POST");
+  });
+
+  it.each([
+    [401, { detail: "session_expired" }, "expired"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [404, { detail: "member_not_found" }, "member_not_found"],
+    [409, { detail: "already_member" }, "already_member"],
+    [409, { detail: "last_owner" }, "last_owner"],
+    [409, { detail: "has_owner" }, "has_owner"],
+    [409, { detail: "conflict" }, "conflict"],
+    [409, { detail: "other" }, "server"],
+    [422, { detail: [] }, "invalid"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await getBoard(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getBoardMembers(7)).toEqual({ kind: "network" });
+  });
+
+  it("reports a server problem when a 200 has no body", async () => {
+    stubFetch(async () => new Response("", { status: 200 }));
+    expect(await getBoard(7)).toEqual({ kind: "server" });
+  });
+});
+
+describe("lists api", () => {
+  const list = { id: 4, name: "Doing" };
+
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("reads the lists of a board", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [list]));
+    expect(await getLists(7)).toEqual({ kind: "ok", data: [list] });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists");
+    expect(init.method).toBe("GET");
+  });
+
+  it("creates a list and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, list));
+    expect(await createList(7, "Doing")).toEqual({ kind: "ok", data: list });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"name":"Doing"}');
+  });
+
+  it("renames a list with PATCH", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await renameList(7, 4, "Doing now");
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/lists/4");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"name":"Doing now"}');
+  });
+
+  it("moves a list after an anchor, or to the front with null", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await moveList(7, 4, 2);
+    await moveList(7, 4, null);
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/lists/4/move");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBe('{"after_id":2}');
+    expect(lastCall(fetchMock, 1)[1].body).toBe('{"after_id":null}');
+  });
+
+  it("archives and restores with POST and no body", async () => {
+    const fetchMock = stubFetch(async () => reply(200, list));
+    await archiveList(7, 4);
+    expect(await restoreList(7, 4)).toEqual({ kind: "ok", data: list });
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/lists/4/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    const second = lastCall(fetchMock, 1);
+    expect(second[0]).toBe("/api/boards/7/lists/4/restore");
+    expect(second[1].method).toBe("POST");
+  });
+
+  it.each([
+    [422, { detail: "list_limit" }, "list_limit"],
+    [422, { detail: "card_limit" }, "card_limit"],
+    [422, { detail: [{ loc: ["body", "name"] }] }, "invalid"],
+    [422, { detail: "invalid_anchor" }, "invalid"],
+    [404, { detail: "list_not_found" }, "list_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "conflict" }, "conflict"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await renameList(7, 4, "x")).toEqual({ kind });
+  });
+
+  it("maps a 422 card_limit on restoring a list to card_limit", async () => {
+    stubFetch(async () => reply(422, { detail: "card_limit" }));
+    expect(await restoreList(7, 4)).toEqual({ kind: "card_limit" });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getLists(7)).toEqual({ kind: "network" });
+  });
+});
+
+describe("cards api", () => {
+  const card = { id: 9, key: "TB-9", list_id: 4, title: "Pack boxes" };
+  const move = { list_id: 4, after_id: null, from_list_id: 3, from_after_id: 8 };
+
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("reads the cards of a board", async () => {
+    const fetchMock = stubFetch(async () => reply(200, [card]));
+    expect(await getCards(7)).toEqual({ kind: "ok", data: [card] });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("creates a card and accepts 201", async () => {
+    const fetchMock = stubFetch(async () => reply(201, card));
+    expect(await createCard(7, 4, "Pack boxes")).toEqual({ kind: "ok", data: card });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"list_id":4,"title":"Pack boxes"}');
+  });
+
+  it("moves a card with all four fields, nulls included", async () => {
+    const fetchMock = stubFetch(async () => reply(200, card));
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "ok", data: card });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9/move");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"list_id":4,"after_id":null,"from_list_id":3,"from_after_id":8}');
+  });
+
+  it("maps 409 card_moved to the card, its place and who moved it", async () => {
+    stubFetch(async () =>
+      reply(409, { detail: "card_moved", card, after_id: 5, moved_by: "Duc Le" }),
+    );
+    expect(await moveCard(7, 9, move)).toEqual({
+      kind: "card_moved",
+      card,
+      after_id: 5,
+      moved_by: "Duc Le",
+    });
+  });
+
+  it("keeps a null after_id and a null name on 409 card_moved", async () => {
+    stubFetch(async () =>
+      reply(409, { detail: "card_moved", card, after_id: null, moved_by: null }),
+    );
+    expect(await moveCard(7, 9, move)).toEqual({
+      kind: "card_moved",
+      card,
+      after_id: null,
+      moved_by: null,
+    });
+  });
+
+  it("reports a 409 card_moved without a card as a server problem", async () => {
+    stubFetch(async () => reply(409, { detail: "card_moved" }));
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "server" });
+  });
+
+  it("copies a card with POST and an empty JSON body", async () => {
+    const copy = { id: 10, key: "TB-10", list_id: 4, title: "Pack boxes (copy)" };
+    const fetchMock = stubFetch(async () => reply(201, copy));
+    expect(await copyCard(7, 9)).toEqual({ kind: "ok", data: copy });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9/copy");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe("{}");
+  });
+
+  it.each([
+    [422, { detail: "card_limit" }, "card_limit"],
+    [422, { detail: [{ loc: ["body", "title"] }] }, "invalid"],
+    [422, { detail: "invalid_anchor" }, "invalid"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "list_not_found" }, "list_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "conflict" }, "conflict"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await createCard(7, 4, "x")).toEqual({ kind });
+    expect(await moveCard(7, 9, move)).toEqual({ kind });
+    expect(await copyCard(7, 9)).toEqual({ kind });
+    expect(await getCards(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getCards(7)).toEqual({ kind: "network" });
+    expect(await moveCard(7, 9, move)).toEqual({ kind: "network" });
+  });
+});
+
+describe("card detail api", () => {
+  const detail = {
+    id: 9,
+    key: "TB-9",
+    list_id: 4,
+    title: "Pack boxes",
+    label_ids: [1],
+    member_ids: [2],
+    due_on: "2026-12-01",
+    has_description: true,
+    description: "Hello",
+  };
+
+  function call(fetchMock: ReturnType<typeof stubFetch>) {
+    return fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  }
+
+  it("reads the labels", async () => {
+    const labels = [{ id: 1, name: "Launch", color: "launch" }];
+    const fetchMock = stubFetch(async () => reply(200, labels));
+    expect(await getLabels()).toEqual({ kind: "ok", data: labels });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/labels");
+    expect(init.method).toBe("GET");
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("reads one card", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await getCard(7, 9)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9");
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+  });
+
+  it.each([
+    [{ title: "New" }, '{"title":"New"}'],
+    [{ description: "Text" }, '{"description":"Text"}'],
+    [{ description: null }, '{"description":null}'],
+    [{ due_on: "2026-12-01" }, '{"due_on":"2026-12-01"}'],
+    [{ due_on: null }, '{"due_on":null}'],
+  ])("patches %j with exactly that body", async (change, body) => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await patchCard(7, 9, change)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe("/api/boards/7/cards/9");
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe(body);
+    expect(init.headers).toEqual({ "content-type": "application/json" });
+  });
+
+  it.each([
+    ["adds a member", () => addCardMember(7, 9, 5), "PUT", "/api/boards/7/cards/9/members/5"],
+    ["removes a member", () => removeCardMember(7, 9, 5), "DELETE", "/api/boards/7/cards/9/members/5"],
+    ["adds a label", () => addCardLabel(7, 9, 3), "PUT", "/api/boards/7/cards/9/labels/3"],
+    ["removes a label", () => removeCardLabel(7, 9, 3), "DELETE", "/api/boards/7/cards/9/labels/3"],
+  ])("%s with no body", async (_name, run, method, path) => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await run()).toEqual({ kind: "ok", data: detail });
+    const [url, init] = call(fetchMock);
+    expect(url).toBe(path);
+    expect(init.method).toBe(method);
+    expect(init.body).toBeUndefined();
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it.each([
+    [422, { detail: "not_assignable" }, "not_assignable"],
+    [404, { detail: "label_not_found" }, "label_not_found"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [422, [{ type: "string_too_short", loc: ["body", "title"], msg: "too short" }], "invalid"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [401, { detail: "not_signed_in" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await getCard(7, 9)).toEqual({ kind });
+    expect(await patchCard(7, 9, { title: "x" })).toEqual({ kind });
+    expect(await addCardMember(7, 9, 5)).toEqual({ kind });
+    expect(await removeCardLabel(7, 9, 3)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await getCard(7, 9)).toEqual({ kind: "network" });
+    expect(await patchCard(7, 9, { due_on: null })).toEqual({ kind: "network" });
+    expect(await getLabels()).toEqual({ kind: "network" });
+  });
+});
+
+describe("checklist and comment calls", () => {
+  const detail = {
+    id: 9,
+    key: "TB-9",
+    list_id: 4,
+    title: "Pack boxes",
+    label_ids: [],
+    member_ids: [],
+    due_on: null,
+    has_description: false,
+    description: null,
+    checklist_done: 0,
+    checklist_total: 1,
+    comment_count: 0,
+    checklist: [{ id: 5, text: "Tape", done: false }],
+  };
+  const comment = {
+    id: 3,
+    author: { id: 1, name: "Ann Lee", avatar_url: null },
+    text: "Hello",
+    created_at: "2026-11-20T09:00:00Z",
+    edited_at: null,
+    editable_until: "2026-11-21T09:00:00Z",
+  };
+  const base = "/api/boards/7/cards/9";
+
+  function first(fetchMock: ReturnType<typeof stubFetch>) {
+    return fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+  }
+
+  it("adds a checklist item with POST and the text", async () => {
+    const fetchMock = stubFetch(async () => reply(201, detail));
+    expect(await addChecklistItem(7, 9, "Tape")).toEqual({ kind: "ok", data: detail });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"text":"Tape"}');
+    expect(init.credentials).toBe("same-origin");
+  });
+
+  it("checks and unchecks an item with PATCH and done", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    await setChecklistItem(7, 9, 5, true);
+    await setChecklistItem(7, 9, 5, false);
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist/5`);
+    expect(init.method).toBe("PATCH");
+    expect(init.body).toBe('{"done":true}');
+    expect((fetchMock.mock.calls[1] as unknown as [string, RequestInit])[1].body).toBe('{"done":false}');
+  });
+
+  it("deletes an item and restores it, both answering the card", async () => {
+    const fetchMock = stubFetch(async () => reply(200, detail));
+    expect(await deleteChecklistItem(7, 9, 5)).toEqual({ kind: "ok", data: detail });
+    expect(await restoreChecklistItem(7, 9, 5)).toEqual({ kind: "ok", data: detail });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/checklist/5`);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+    const [rUrl, rInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(rUrl).toBe(`${base}/checklist/5/restore`);
+    expect(rInit.method).toBe("POST");
+    expect(rInit.body).toBe("{}");
+  });
+
+  it("reads the feed", async () => {
+    const feed = { entries: [{ type: "comment", ...comment }], more: false };
+    const fetchMock = stubFetch(async () => reply(200, feed));
+    expect(await getFeed(7, 9)).toEqual({ kind: "ok", data: feed });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/feed`);
+    expect(init.method).toBe("GET");
+  });
+
+  it("posts and edits a comment with the text", async () => {
+    const fetchMock = stubFetch(async () => reply(201, comment));
+    expect(await postComment(7, 9, "Hello")).toEqual({ kind: "ok", data: comment });
+    const [url, init] = first(fetchMock);
+    expect(url).toBe(`${base}/comments`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe('{"text":"Hello"}');
+    const edited = stubFetch(async () => reply(200, comment));
+    expect(await editComment(7, 9, 3, "Hi")).toEqual({ kind: "ok", data: comment });
+    const [eUrl, eInit] = first(edited);
+    expect(eUrl).toBe(`${base}/comments/3`);
+    expect(eInit.method).toBe("PATCH");
+    expect(eInit.body).toBe('{"text":"Hi"}');
+  });
+
+  it("deletes a comment (204, no body) and restores it", async () => {
+    const del = stubFetch(async () => new Response(null, { status: 204 }));
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind: "ok", data: undefined });
+    const [url, init] = first(del);
+    expect(url).toBe(`${base}/comments/3`);
+    expect(init.method).toBe("DELETE");
+    const restore = stubFetch(async () => reply(200, comment));
+    expect(await restoreComment(7, 9, 3)).toEqual({ kind: "ok", data: comment });
+    const [rUrl, rInit] = first(restore);
+    expect(rUrl).toBe(`${base}/comments/3/restore`);
+    expect(rInit.method).toBe("POST");
+    expect(rInit.body).toBe("{}");
+  });
+
+  it.each([
+    [404, { detail: "item_not_found" }, "item_not_found"],
+    [404, { detail: "comment_not_found" }, "comment_not_found"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [403, { detail: "edit_window_closed" }, "edit_window_closed"],
+    [403, { detail: "forbidden" }, "forbidden"],
+    [422, { detail: "checklist_limit" }, "checklist_limit"],
+    [422, { detail: "comment_limit" }, "comment_limit"],
+    [422, [{ type: "string_too_short", loc: ["body", "text"], msg: "too short" }], "invalid"],
+    [401, { detail: "not_signed_in" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await addChecklistItem(7, 9, "x")).toEqual({ kind });
+    expect(await setChecklistItem(7, 9, 5, true)).toEqual({ kind });
+    expect(await deleteChecklistItem(7, 9, 5)).toEqual({ kind });
+    expect(await restoreChecklistItem(7, 9, 5)).toEqual({ kind });
+    expect(await getFeed(7, 9)).toEqual({ kind });
+    expect(await postComment(7, 9, "x")).toEqual({ kind });
+    expect(await editComment(7, 9, 3, "x")).toEqual({ kind });
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind });
+    expect(await restoreComment(7, 9, 3)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    throwing();
+    expect(await addChecklistItem(7, 9, "x")).toEqual({ kind: "network" });
+    expect(await getFeed(7, 9)).toEqual({ kind: "network" });
+    expect(await deleteComment(7, 9, 3)).toEqual({ kind: "network" });
+  });
+});
+
 describe("signOut", () => {
   it("posts to /auth/logout with the session cookie", async () => {
     const fetchMock = stubFetch(async () => new Response(null, { status: 204 }));
@@ -269,5 +808,81 @@ describe("signOut", () => {
       throw new TypeError("offline");
     });
     await expect(signOut()).resolves.toBeUndefined();
+  });
+});
+
+describe("archive api", () => {
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("archives and restores a board with POST and no body", async () => {
+    const fetchMock = stubFetch(async () => reply(200, { id: 7, name: "Office move" }));
+    expect(await archiveBoard(7)).toEqual({ kind: "ok", data: { id: 7, name: "Office move" } });
+    await restoreBoard(7);
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    const second = lastCall(fetchMock, 1);
+    expect(second[0]).toBe("/api/boards/7/restore");
+    expect(second[1].method).toBe("POST");
+  });
+
+  it("reads the archived boards", async () => {
+    const rows = [{ id: 7, name: "Old", archived_at: "2026-11-20T09:00:00Z" }];
+    const fetchMock = stubFetch(async () => reply(200, rows));
+    expect(await getArchivedBoards()).toEqual({ kind: "ok", data: rows });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/archived");
+    expect(init.method).toBe("GET");
+  });
+
+  it("reads the archived lists and cards of a board", async () => {
+    const view = { lists: [], cards: [] };
+    const fetchMock = stubFetch(async () => reply(200, view));
+    expect(await getArchived(7)).toEqual({ kind: "ok", data: view });
+    expect(lastCall(fetchMock)[0]).toBe("/api/boards/7/archived");
+  });
+
+  it("archives and restores a card with POST and no body", async () => {
+    const tile = { id: 9, key: "TB-9", list_id: 4, title: "Pack boxes" };
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    expect(await archiveCard(7, 9)).toEqual({ kind: "ok", data: tile });
+    expect(await restoreCard(7, 9)).toEqual({ kind: "ok", data: tile });
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/cards/9/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    expect(lastCall(fetchMock, 1)[0]).toBe("/api/boards/7/cards/9/restore");
+  });
+
+  it.each([
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "no_list" }, "no_list"],
+    [422, { detail: "card_limit" }, "card_limit"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j on a card restore to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await restoreCard(7, 9)).toEqual({ kind });
+  });
+
+  it.each([
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [500, {}, "server"],
+  ])("maps %s %j on a board archive to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await archiveBoard(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    stubFetch(async () => {
+      throw new TypeError("network down");
+    });
+    expect(await getArchived(7)).toEqual({ kind: "network" });
   });
 });
