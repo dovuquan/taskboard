@@ -138,7 +138,7 @@ def test_event_data_is_cut_to_the_allowed_keys_and_other_kinds_are_left_out(as_u
         {"key": "TB-1", "cleared": False, "secret": "text", "description": "never"},
         at=now - 3 * HOUR,
     )
-    add_event(db_url, w, "card.archived", {"key": "TB-1"}, at=now - 2 * HOUR)
+    add_event(db_url, w, "card.deleted", {"key": "TB-1"}, at=now - 2 * HOUR)
     add_event(db_url, w, "something.else", {"key": "TB-1"}, at=now - HOUR)
 
     entries = feed(w)["entries"]

@@ -18,7 +18,16 @@ from sqlalchemy.orm import Session
 
 from taskboard.auth import current_user, get_db, require_admin
 from taskboard.events import record_change
-from taskboard.models import Board, BoardMember, Card, CardMember, Event, User, WorkspaceMember
+from taskboard.models import (
+    Board,
+    BoardMember,
+    Card,
+    CardMember,
+    Event,
+    User,
+    WorkspaceMember,
+    _now,
+)
 
 router = APIRouter()
 
@@ -256,6 +265,24 @@ def _detail(db: Session, board_id: int, my_role: str) -> dict[str, Any]:
     return {**_tile(db, board, my_role), "created_at": _iso(board.created_at)}
 
 
+def _restore_role(s: Session, user: User, board: Board) -> str:
+    """May the person restore this archived board? `owner` if so, else 403 or 404.
+
+    An owner row restores; so does a workspace admin who could see the board (Workspace, or a
+    row on it). Anyone else who could see it gets 403 `forbidden`; a Private board hides from
+    the rest with 404 `board_not_found`.
+    """
+    is_admin = _workspace_role(s, user) == "admin"
+    row_role = _row_role(s, board.id, user.id)
+    if row_role == "owner" or (
+        is_admin and (row_role is not None or board.visibility == "workspace")
+    ):
+        return "owner"
+    if row_role is not None or board.visibility == "workspace":
+        raise HTTPException(403, "forbidden")
+    raise HTTPException(404, "board_not_found")
+
+
 def _members(db: Session, board_id: int) -> list[dict[str, Any]]:
     rows = db.execute(
         select(User, BoardMember)
@@ -312,6 +339,28 @@ def ownerless_boards(_admin: User = Depends(require_admin), db: Session = Depend
         .order_by(Board.id)
     ).all()
     return [_tile(db, board, None) for board in boards]
+
+
+@router.get("/api/boards/archived")
+def archived_boards(
+    user: User = Depends(current_user),
+    _ws_role: str = Depends(_workspace_member),
+    db: Session = Depends(get_db),
+):
+    """Archived boards the caller may restore, newest archived first."""
+    boards = db.scalars(
+        select(Board)
+        .where(Board.archived_at.is_not(None))
+        .order_by(Board.archived_at.desc(), Board.id.desc())
+    ).all()
+    tiles = []
+    for board in boards:
+        try:
+            role = _restore_role(db, user, board)
+        except HTTPException:
+            continue
+        tiles.append({**_tile(db, board, role), "archived_at": _iso(board.archived_at)})
+    return tiles
 
 
 @router.post("/api/boards", status_code=201)
@@ -405,6 +454,79 @@ def patch_board(
     except NotOwner:
         raise HTTPException(403, "forbidden") from None
     return _detail(db, board_id, ctx.role)
+
+
+# ---- archive and restore ----------------------------------------------------------
+
+
+@router.post("/api/boards/{board_id}/archive")
+def archive_board(ctx: BoardCtx = _OWNER, db: Session = Depends(get_db)):
+    board_id, actor_id = ctx.board.id, ctx.user.id
+    data: dict[str, str] = {}  # filled inside the transaction; record_change reads it afterwards
+
+    def change(s: Session) -> None:
+        result = s.execute(
+            update(Board)
+            .where(Board.id == board_id, Board.archived_at.is_(None))
+            .values(archived_at=_now())
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "board_not_found")
+        _ensure_acting_owner(s, actor_id, board_id)
+        data["name"] = s.scalar(select(Board.name).where(Board.id == board_id))
+
+    try:
+        record_change(
+            db,
+            change,
+            actor_id=actor_id,
+            kind="board.archived",
+            subject_type="board",
+            subject_id=str(board_id),
+            data=data,
+            board_id=board_id,
+        )
+    except NotOwner:
+        raise HTTPException(403, "forbidden") from None
+    return {"id": board_id, "name": data["name"]}
+
+
+@router.post("/api/boards/{board_id}/restore")
+def restore_board(
+    board_id: BoardId, user: User = Depends(current_user), db: Session = Depends(get_db)
+):
+    actor_id = user.id
+    board = db.get(Board, board_id)
+    if board is None or board.archived_at is None:
+        raise HTTPException(404, "board_not_found")
+    archived_at = board.archived_at
+    _restore_role(db, user, board)
+    data: dict[str, str] = {}
+
+    def change(s: Session) -> None:
+        result = s.execute(
+            update(Board)
+            .where(Board.id == board_id, Board.archived_at == archived_at)
+            .values(archived_at=None)
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "board_not_found")
+        # The lock is ours; the actor's standing is read as it is now.
+        s.expire_all()
+        _restore_role(s, user, s.get(Board, board_id))
+        data["name"] = s.scalar(select(Board.name).where(Board.id == board_id))
+
+    record_change(
+        db,
+        change,
+        actor_id=actor_id,
+        kind="board.restored",
+        subject_type="board",
+        subject_id=str(board_id),
+        data=data,
+        board_id=board_id,
+    )
+    return _detail(db, board_id, "owner")
 
 
 # ---- members ----------------------------------------------------------------------
