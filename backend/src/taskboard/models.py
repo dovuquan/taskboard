@@ -144,6 +144,7 @@ class Card(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime)
+    archived_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
 
 class Label(Base):

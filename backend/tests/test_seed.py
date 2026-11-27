@@ -315,7 +315,7 @@ def test_check_passes_after_seeding(migrated, capsys):
     capsys.readouterr()
 
     assert cli.main(["check"]) == 0
-    assert capsys.readouterr().out == "integrity: ok\nschema: 0006 (head)\n"
+    assert capsys.readouterr().out == "integrity: ok\nschema: 0007 (head)\n"
 
 
 def test_the_sample_is_invented_and_valid():

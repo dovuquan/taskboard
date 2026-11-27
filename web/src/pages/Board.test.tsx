@@ -72,8 +72,21 @@ describe("BoardView header", () => {
     expect(html).toContain('href="/boards/7/settings"');
   });
 
-  it("has no Archived button yet", () => {
-    expect(render().text).not.toContain("Archived");
+  it.each(["owner", "member", "observer"] as const)(
+    "links to the Archived view for a %s",
+    (my_role) => {
+      const { html } = render({ board: board({ my_role }) });
+      expect(html).toMatch(/<a[^>]*href="\/boards\/7\/archived"[^>]*>[\s\S]*Archived<\/a>/);
+    },
+  );
+
+  it("shows no number while nothing is archived or the count is unknown", () => {
+    expect(render().text).not.toContain("Archived (");
+    expect(render({ archivedCount: 0 }).text).not.toContain("Archived (");
+  });
+
+  it("shows how many lists and cards are archived", () => {
+    expect(render({ archivedCount: 4 }).text).toContain("Archived (4)");
   });
 });
 

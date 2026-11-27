@@ -163,10 +163,28 @@ describe("BoardSettingsView as an owner", () => {
     expect(text).not.toContain("Nobody in the workspace matches");
   });
 
-  it("has no archive box (arrives later)", () => {
-    const { text } = render();
-    expect(text).not.toContain("Archive this board");
-    expect(text).not.toContain("Archive board");
+  it("has the archive box for an owner, with the prototype's words", () => {
+    const { html, text } = render();
+    expect(html).toContain('class="dangerbox"');
+    expect(text).toContain("Archive this board");
+    expect(text).toContain("Hides the board from everyone. You can restore it later.");
+    expect(html).toMatch(/<button[^>]*>Archive board…<\/button>/);
+    expect(text).not.toContain("Everyone loses access");
+  });
+
+  it("asks to confirm before archiving", () => {
+    const { html, text } = render({ confirmArchive: true });
+    expect(text).toContain(
+      "Archive Office move? Everyone loses access until an owner or admin restores it from Archived boards on the Boards page.",
+    );
+    expect(html).toMatch(/<button[^>]*>Archive board<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Cancel<\/button>/);
+    expect(text).not.toContain("Hides the board from everyone");
+  });
+
+  it("disables the confirm button while the server answers", () => {
+    const { html } = render({ confirmArchive: true, busy: true });
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Archive board<\/button>/);
   });
 });
 
@@ -179,6 +197,13 @@ describe("BoardSettingsView read-only", () => {
     expect(text).not.toContain("Board settings");
     expect(html).toContain('class="banner"');
     expect(text).toContain("Only board owners can change these settings.");
+  });
+
+  it.each(["member", "observer"] as const)("has no archive box for a %s", (role) => {
+    const { html, text } = readOnly(role);
+    expect(html).not.toContain("dangerbox");
+    expect(text).not.toContain("Archive this board");
+    expect(text).not.toContain("Archive board");
   });
 
   it("disables the name and the visibility radios", () => {

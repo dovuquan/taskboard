@@ -45,6 +45,14 @@ const CASES: [string, Kind, Screen][] = [
   ["/boards/7", "user", "board"],
   ["/boards/7/", "user", "board"],
   ["/boards/7/settings", "user", "board-settings"],
+  ["/boards/7/archived", "user", "board-archived"],
+  ["/boards/7/archived/", "user", "board-archived"],
+  ["/boards/7/archived", "expired", "expired"],
+  ["/boards/7/archived", "signed_out", "signin"],
+  ["/boards/7/archived", "error", "error"],
+  ["/boards/7/archived/more", "user", "boards"],
+  ["/boards/0/archived", "user", "boards"],
+  ["/boards/7/cards/archived", "user", "board-card"],
   ["/boards/7", "expired", "expired"],
   ["/boards/7/settings", "signed_out", "signin"],
   ["/boards/7", "error", "error"],
@@ -81,6 +89,7 @@ describe("boardIdFromPath", () => {
   it("reads the id from a board path and its settings path", () => {
     expect(boardIdFromPath("/boards/7")).toBe(7);
     expect(boardIdFromPath("/boards/12/settings")).toBe(12);
+    expect(boardIdFromPath("/boards/12/archived")).toBe(12);
   });
 
   it.each(["/boards", "/boards/abc", "/boards/0", "/boards/1.5", "/members", "/boards/7/x"])(
@@ -117,6 +126,7 @@ describe("card paths", () => {
   it.each([
     "/boards/7",
     "/boards/7/settings",
+    "/boards/7/archived",
     "/boards/7/cards",
     "/boards/7/cards/",
     "/boards/7/cards/TB-3/more",

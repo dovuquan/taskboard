@@ -51,6 +51,7 @@ COLUMNS = {
         "created_by",
         "created_at",
         "archived_at",
+        "archived_by",
     },
     "labels": {"id", "name", "color"},
     "card_members": {"card_id", "user_id"},
@@ -198,6 +199,71 @@ def test_downgrade_to_0005_drops_the_checklist_and_comment_tables(db_url):
 
     command.upgrade(config, "head")
     assert {"checklist_items", "comments"} <= set(inspect(create_engine(db_url)).get_table_names())
+
+
+def test_cards_archived_by_is_a_nullable_foreign_key_to_users(db_url):
+    run_migrations(db_url)
+
+    inspector = inspect(create_engine(db_url))
+    columns = {c["name"]: c for c in inspector.get_columns("cards")}
+    assert columns["archived_by"]["nullable"] is True
+    refs = {
+        tuple(fk["constrained_columns"]): fk["referred_table"]
+        for fk in inspector.get_foreign_keys("cards")
+    }
+    assert refs[("archived_by",)] == "users"
+
+
+def test_downgrade_to_0006_drops_archived_by_and_keeps_the_cards(db_url):
+    run_migrations(db_url)
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    config.set_main_option("sqlalchemy.url", db_url)
+    engine = make_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(
+            text("INSERT INTO users (id, email, created_at) VALUES (1, 'a@example.com', '2026')")
+        )
+        conn.execute(
+            text(
+                "INSERT INTO boards (id, name, visibility, created_by, created_at) "
+                "VALUES (1, 'B', 'workspace', 1, '2026-01-01 00:00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO lists (id, board_id, name, position, created_by, created_at) "
+                "VALUES (1, 1, 'L', 1.0, 1, '2026-01-01 00:00:00')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO cards (id, board_id, list_id, number, title, position, created_by, "
+                "created_at, archived_at, archived_by) VALUES "
+                "(1, 1, 1, 1, 'T', 1.0, 1, '2026-01-01 00:00:00', '2026-01-02 00:00:00', 1)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO comments (card_id, author_id, text, created_at) "
+                "VALUES (1, 1, 'hi', '2026-01-01 00:00:00')"
+            )
+        )
+    engine.dispose()
+
+    command.downgrade(config, "0006")
+
+    inspector = inspect(create_engine(db_url))
+    assert "archived_by" not in {c["name"] for c in inspector.get_columns("cards")}
+    check = create_engine(db_url)
+    with check.connect() as conn:
+        assert conn.execute(text("SELECT title, archived_at FROM cards")).one()[0] == "T"
+        assert conn.execute(text("SELECT count(*) FROM comments")).scalar() == 1
+        assert conn.execute(text("PRAGMA foreign_key_check")).all() == []
+    check.dispose()
+
+    command.upgrade(config, "head")
+    assert "archived_by" in {c["name"] for c in inspect(create_engine(db_url)).get_columns("cards")}
 
 
 def test_foreign_keys_are_enforced(db_url):

@@ -1,13 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
+  type ArchivedBoard,
   type Me,
   type Tile,
   createBoard,
+  getArchivedBoards,
   getBoards,
   getOwnerless,
+  restoreBoard,
   takeOwnership,
 } from "../api";
+import { takeHandoff } from "../archive/handoff";
+import { restoredBoardText } from "../archive/text";
 import { AvatarStack } from "../components/Avatar";
 import { Icon } from "../components/Icon";
 import { Link } from "../components/Link";
@@ -22,6 +27,8 @@ type ViewProps = {
   state: State;
   tiles: Tile[];
   ownerless: Tile[];
+  /** Archived boards the person may restore; empty hides the section. */
+  archived?: ArchivedBoard[];
   admin: boolean;
   domain: string | null;
   memberCount: number | null;
@@ -35,6 +42,8 @@ type ViewProps = {
   onPriv?: (priv: boolean) => void;
   onCreate?: () => void;
   onTake?: (id: number) => void;
+  onRestore?: (id: number) => void;
+  onUndo?: (() => void) | null;
   onRetry?: () => void;
 };
 
@@ -135,7 +144,8 @@ function NewBoardForm({ form, onName, onPriv, onCreate, onCancelForm }: Pick<
 
 export function BoardsView(props: ViewProps) {
   const { state, tiles, ownerless, admin, domain, memberCount, now, form, message, busy } = props;
-  const { onOpenForm, onTake, onRetry } = props;
+  const { onOpenForm, onTake, onRestore, onUndo, onRetry } = props;
+  const archived = props.archived ?? [];
   const solo = memberCount === 1;
 
   let body;
@@ -228,13 +238,39 @@ export function BoardsView(props: ViewProps) {
             ))}
           </section>
         )}
+        {state === "ready" && archived.length > 0 && (
+          <section className="sub-sec">
+            <h2>Archived boards</h2>
+            {archived.map((t) => (
+              <div className="person-row" key={t.id}>
+                <span className="sq" style={{ background: tileColor(t.id) }}></span>
+                <b>{t.name}</b>
+                <span className="muted">{`Archived ${formatUpdated(t.archived_at, now)} · its lists and cards are kept`}</span>
+                <button
+                  className="btn sm"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onRestore?.(t.id)}
+                >
+                  Restore
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
       </div>
-      <Toast message={message} />
+      <Toast message={message} onUndo={onUndo} />
     </>
   );
 }
 
-type Loaded = { state: State; tiles: Tile[]; ownerless: Tile[]; now: Date };
+type Loaded = {
+  state: State;
+  tiles: Tile[];
+  ownerless: Tile[];
+  archived: ArchivedBoard[];
+  now: Date;
+};
 
 export function Boards({
   me,
@@ -250,19 +286,26 @@ export function Boards({
     state: "loading",
     tiles: [],
     ownerless: [],
+    archived: [],
     now: new Date(),
   });
   const [attempt, setAttempt] = useState(0);
   const [form, setForm] = useState<Form>({ open: false, name: "", priv: false, saving: false });
   const [busy, setBusy] = useState(false);
-  const [message, show] = useToast();
+  const [message, show, undo] = useToast();
+  // The handoff Undo is set once, so it reads the current `busy` through a ref.
+  const busyNow = useRef(false);
 
   useEffect(() => {
     let live = true;
-    void Promise.all([getBoards(), admin ? getOwnerless() : Promise.resolve(null)]).then(
-      ([boards, orphans]) => {
+    void Promise.all([
+      getBoards(),
+      admin ? getOwnerless() : Promise.resolve(null),
+      getArchivedBoards(),
+    ]).then(
+      ([boards, orphans, gone]) => {
         if (!live) return;
-        if (boards.kind === "expired" || orphans?.kind === "expired") {
+        if (boards.kind === "expired" || orphans?.kind === "expired" || gone.kind === "expired") {
           // The app shell shows the expired screen once /api/me says so.
           window.location.reload();
           return;
@@ -276,7 +319,9 @@ export function Boards({
         }
         // A failing ownerless list only hides that section; the boards still show.
         const ownerless = orphans?.kind === "ok" ? orphans.data : [];
-        setLoad({ state: "ready", tiles: boards.data, ownerless, now: new Date() });
+        // The same for the archived list: failing only hides its section.
+        const archived = gone.kind === "ok" ? gone.data : [];
+        setLoad({ state: "ready", tiles: boards.data, ownerless, archived, now: new Date() });
       },
     );
     return () => {
@@ -311,9 +356,11 @@ export function Boards({
   }
 
   async function onTake(id: number) {
-    if (busy) return;
+    if (busyNow.current) return;
+    busyNow.current = true;
     setBusy(true);
     const res = await takeOwnership(id);
+    busyNow.current = false;
     setBusy(false);
     if (res.kind === "ok") {
       show(`You now own ${res.data.name}`);
@@ -329,11 +376,39 @@ export function Boards({
     }
   }
 
+  // Archiving a board leaves for this screen; its toast, with Undo, shows here.
+  useEffect(() => {
+    const waiting = takeHandoff();
+    if (waiting) show(waiting.text, () => void onRestore(waiting.undoBoardId));
+  }, []);
+
+  async function onRestore(id: number) {
+    if (busyNow.current) return;
+    busyNow.current = true;
+    setBusy(true);
+    const res = await restoreBoard(id);
+    busyNow.current = false;
+    setBusy(false);
+    if (res.kind === "ok") {
+      show(restoredBoardText(res.data.name));
+      refresh();
+      return;
+    }
+    const failure = describeFailure(res.kind);
+    if (failure.expired) window.location.reload();
+    else {
+      show(failure.message);
+      // Restored by someone else, or no longer ours to restore: show the current list.
+      if (res.kind === "not_found" || res.kind === "forbidden") refresh();
+    }
+  }
+
   return (
     <BoardsView
       state={load.state}
       tiles={load.tiles}
       ownerless={load.ownerless}
+      archived={load.archived}
       admin={admin}
       domain={domain}
       memberCount={memberCount}
@@ -347,6 +422,8 @@ export function Boards({
       onPriv={(priv) => setForm((f) => ({ ...f, priv }))}
       onCreate={() => void onCreate()}
       onTake={(id) => void onTake(id)}
+      onRestore={(id) => void onRestore(id)}
+      onUndo={undo}
       onRetry={onRetry}
     />
   );

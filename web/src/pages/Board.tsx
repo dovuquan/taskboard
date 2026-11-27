@@ -7,6 +7,7 @@ import {
   type Card,
   type Label,
   type Me,
+  getArchived,
   getBoard,
   getBoardMembers,
   getCards,
@@ -14,6 +15,8 @@ import {
   getLists,
 } from "../api";
 import { EXPIRED_KEPT_TEXT, canAddCard, expiredAction, groupByList, shouldApply, ungroup } from "../cards/logic";
+import { setHandoff } from "../archive/handoff";
+import { archivedBoardText, archivedButtonText } from "../archive/text";
 import { startBoardPoller } from "../cards/poller";
 import { CARD_LIMIT_TEXT } from "../cards/text";
 import { AvatarStack } from "../components/Avatar";
@@ -42,6 +45,8 @@ type ViewProps = {
   cards?: Card[];
   labels?: Label[];
   people?: CardPerson[];
+  /** Archived lists plus archived cards, for the header button; null while unknown. */
+  archivedCount?: number | null;
   lanes?: Partial<LanesControls>;
   onRetry?: () => void;
 };
@@ -55,16 +60,19 @@ type Snapshot =
       cards: Card[];
       labels: Label[];
       people: BoardMember[];
+      /** How many rows the Archived view has; null when that call failed (the board still shows). */
+      archived: number | null;
     }
   | { kind: "expired" | "not_found" | "network" | "server" };
 
 async function fetchSnapshot(id: number): Promise<Snapshot> {
-  const [board, lists, cards, labels, people] = await Promise.all([
+  const [board, lists, cards, labels, people, archived] = await Promise.all([
     getBoard(id),
     getLists(id),
     getCards(id),
     getLabels(),
     getBoardMembers(id),
+    getArchived(id),
   ]);
   if (
     board.kind === "ok" &&
@@ -80,6 +88,7 @@ async function fetchSnapshot(id: number): Promise<Snapshot> {
       cards: cards.data,
       labels: labels.data,
       people: people.data,
+      archived: archived.kind === "ok" ? archived.data.lists.length + archived.data.cards.length : null,
     };
   }
   const kinds: string[] = [board.kind, lists.kind, cards.kind, labels.kind, people.kind];
@@ -128,6 +137,7 @@ export function BoardView({
   cards = [],
   labels = [],
   people = [],
+  archivedCount = null,
   lanes,
   onRetry,
 }: ViewProps) {
@@ -149,6 +159,9 @@ export function BoardView({
             <span className="chip accent">{`You: ${roleChip(board.my_role)}`}</span>
             <span className="spacer"></span>
             <AvatarStack people={board.members} total={board.member_count} />
+            <Link className="btn" to={`/boards/${board.id}/archived`}>
+              <Icon name="box" /> {archivedButtonText(archivedCount)}
+            </Link>
             <Link className="btn" to={`/boards/${board.id}/settings`}>
               {owner ? (
                 <>
@@ -273,6 +286,7 @@ export function Board({
   const [labels, setLabels] = useState<Label[]>([]);
   const [people, setPeople] = useState<BoardMember[]>([]);
   const [polled, setPolled] = useState(0);
+  const [archivedCount, setArchivedCount] = useState<number | null>(null);
 
   // A reload may replace the screen only if nothing local happened since it began: `epoch` counts
   // local changes, `pending` the saves in flight, `dragging` a drag under way.
@@ -298,6 +312,7 @@ export function Board({
     setCards([]);
     setLabels([]);
     setPeople([]);
+    setArchivedCount(null);
     async function fetchAll() {
       const res = await fetchSnapshot(id);
       if (!live) return;
@@ -309,6 +324,7 @@ export function Board({
         setCards(res.cards);
         setLabels(res.labels);
         setPeople(res.people);
+        setArchivedCount(res.archived);
         setLoad({ state: "ready", board: res.board });
       }
     }
@@ -334,6 +350,8 @@ export function Board({
         setCards(res.cards);
         setLabels(res.labels);
         setPeople(res.people);
+        // A failed count keeps the last one.
+        setArchivedCount((n) => res.archived ?? n);
         setLoad({ state: "ready", board: res.board });
         // The open card's description is fetched again once the new cards are on screen.
         setPolled((n) => n + 1);
@@ -442,6 +460,7 @@ export function Board({
         editor={cardEditor}
         onMoveCardTo={lanes.onMoveCardTo}
         onCopyCard={lanes.onCopyCard}
+        onArchiveCard={lanes.onArchiveCard}
       />
     ) : null;
 
@@ -456,6 +475,10 @@ export function Board({
         onGone={() => setLoad({ state: "gone", board: null })}
         onExpired={expire}
         onClose={() => navigate(`/boards/${id}`)}
+        onArchived={(archived) => {
+          setHandoff({ text: archivedBoardText(archived.name), undoBoardId: archived.id });
+          navigate("/boards");
+        }}
       />
     ) : null;
 
@@ -471,6 +494,7 @@ export function Board({
       cards={cards}
       labels={labels}
       people={people}
+      archivedCount={archivedCount}
       lanes={lanes}
       onRetry={() => setAttempt((n) => n + 1)}
     />

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { type Me, type MeResult, getConfig, getMe, getMemberCount } from "./api";
 import { AppBar } from "./components/AppBar";
+import { Archived } from "./pages/Archived";
 import { Board } from "./pages/Board";
 import { Boards } from "./pages/Boards";
 import { Expired } from "./pages/Expired";
@@ -28,11 +29,13 @@ type AppViewProps = {
   onBoardName?: (name: string | null) => void;
 };
 
-function barScreen(screen: Screen): "boards" | "members" | "board" | null {
+function barScreen(screen: Screen): "boards" | "members" | "board" | "archived" | null {
   switch (screen) {
     case "boards":
     case "members":
       return screen;
+    case "board-archived":
+      return "archived";
     case "board":
     case "board-settings":
     case "board-card":
@@ -43,11 +46,13 @@ function barScreen(screen: Screen): "boards" | "members" | "board" | null {
 }
 
 export function AppView(props: AppViewProps) {
-  const { screen, user, boardName } = props;
+  const { screen, user, boardName, boardId } = props;
   const bar = barScreen(screen);
   return (
     <>
-      {bar && user && <AppBar user={user} screen={bar} boardName={boardName} />}
+      {bar && user && (
+        <AppBar user={user} screen={bar} boardName={boardName} boardId={boardId} />
+      )}
       <main id="screen">
         <Screen {...props} />
       </main>
@@ -91,6 +96,8 @@ function Screen({
           />
         )
       );
+    case "board-archived":
+      return user && boardId != null && <Archived id={boardId} onBoardName={onBoardName} />;
     case "members":
       return user && <Members me={user} domain={domain} />;
     case "error":

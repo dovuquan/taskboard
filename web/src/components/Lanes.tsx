@@ -5,6 +5,7 @@ import {
   type Card,
   type CardError,
   type ListError,
+  archiveCard,
   archiveList,
   type Label,
   copyCard,
@@ -14,8 +15,10 @@ import {
   moveCard,
   moveList,
   renameList,
+  restoreCard,
   restoreList,
 } from "../api";
+import { archivedCardText, restoredCardText, undoCardFailureText } from "../archive/text";
 import {
   type ByList,
   type MovePlan,
@@ -68,6 +71,8 @@ export type LanesControls = {
   onMoveCardTo: (cardId: number, listId: number) => void;
   /** Copies a card (the dialog's "Copy card"). */
   onCopyCard: (cardId: number) => void;
+  /** Archives a card (the dialog's "Archive card"): the tile leaves at once, Undo comes with the answer. */
+  onArchiveCard: (cardId: number) => void;
   onCardDragStart: (id: number) => void;
   onCardDragEnd: () => void;
   onCardDragOver: (listId: number, index: number) => void;
@@ -557,6 +562,8 @@ export function useLanes({
     void track(archiveList(boardId, id)).then((res) => {
       if (res.kind === "ok") {
         notify(archivedText(list.name), () => void undoArchive(list));
+        // The Archived count on the board header changed.
+        void refresh();
         return;
       }
       setLists((ls) => reinsertAt(ls, list, index));
@@ -667,6 +674,41 @@ export function useLanes({
     }
   }
 
+  /** The tile leaves at once; the toast with Undo comes once the server has answered. */
+  function archiveCardOf(id: number) {
+    const archived = archiveIn(cardsNow.current, id);
+    if (!archived) return;
+    const { index, list: card } = archived;
+    setCards((cs) => archiveIn(cs, id)?.next ?? cs);
+    void track(archiveCard(boardId, id)).then((res) => {
+      if (res.kind === "ok") {
+        notify(archivedCardText(card.key), () => void undoArchiveCard(card));
+        void refresh();
+        return;
+      }
+      setCards((cs) => reinsertAt(cs, card, index));
+      failCard(res.kind, cardFailureText(res.kind, true));
+    });
+  }
+
+  async function undoArchiveCard(card: Card) {
+    const res = await track(restoreCard(boardId, card.id));
+    if (res.kind !== "ok") {
+      failCard(res.kind, undoCardFailureText(res.kind));
+      return;
+    }
+    const made = res.data;
+    setCards((cs) => (cs.some((c) => c.id === made.id) ? cs : [...cs, made]));
+    notify(
+      restoredCardText(
+        made.key,
+        current.current.find((l) => l.id === made.list_id)?.name ?? "its list",
+      ),
+    );
+    // The server put it back at its old place (or the first list): show that.
+    void refresh();
+  }
+
   function dropCard(listId: number, index: number) {
     const id = cardDragId;
     endCardDrag();
@@ -714,6 +756,7 @@ export function useLanes({
       moveCardTo(cardId, listId, length);
     },
     onCopyCard: (cardId) => void copyCardOf(cardId),
+    onArchiveCard: archiveCardOf,
     onCardDragStart: (id) => {
       setCardDragId(id);
       setDragging(true);

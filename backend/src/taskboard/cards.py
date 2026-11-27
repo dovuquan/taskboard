@@ -7,6 +7,7 @@ number, never stored. Every write is one transaction with its `events` row, and 
 write lock with its first statement; a write that finds the world changed writes nothing.
 """
 
+from datetime import timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +22,7 @@ from taskboard.card_fields import (
     _TITLE_MAX,
     CardId,
     CardTitle,
+    _lock_visible_card,
     copy_links,
     tile_of,
     visible_tiles,
@@ -32,6 +34,7 @@ from taskboard.ordering import Exhausted, between, rebalance
 router = APIRouter()
 
 MAX_CARDS = 1000
+RESTORE_WINDOW = timedelta(seconds=60)
 _MAX_ID = 2**63 - 1
 _COPY_SUFFIX = " (copy)"
 
@@ -348,4 +351,96 @@ def copy_card(
     return out
 
 
-__all__ = ["MAX_CARDS", "router", "visible_card_count"]
+@router.post("/api/boards/{board_id}/cards/{card_id}/archive")
+def archive_card(card_id: CardId, ctx: BoardCtx = _WRITE, db: Session = Depends(get_db)):
+    board_id, actor_id, prefix = ctx.board.id, ctx.user.id, ctx.board.key_prefix
+    out: dict[str, Any] = {}
+    data: dict[str, Any] = {}
+
+    def change(s: Session) -> None:
+        _lock_visible_card(s, board_id, card_id)
+        ensure_role(s, ctx.user, board_id, "member")
+        s.execute(
+            update(Card).where(Card.id == card_id).values(archived_at=_now(), archived_by=actor_id)
+        )
+        out.update(tile_of(s, board_id, prefix, card_id))
+        data.update(key=out["key"], list_id=out["list_id"])
+
+    record_change(
+        db,
+        change,
+        actor_id=actor_id,
+        kind="card.archived",
+        subject_type="card",
+        subject_id=str(card_id),
+        data=data,
+        board_id=board_id,
+    )
+    return out
+
+
+@router.post("/api/boards/{board_id}/cards/{card_id}/restore")
+def restore_card(card_id: CardId, ctx: BoardCtx = _WRITE, db: Session = Depends(get_db)):
+    board_id, actor_id, prefix = ctx.board.id, ctx.user.id, ctx.board.key_prefix
+    row = db.get(Card, card_id)
+    if row is None or row.board_id != board_id or row.archived_at is None:
+        raise HTTPException(404, "card_not_found")
+    archived_at, archived_by = row.archived_at, row.archived_by
+    if ctx.role != "owner":
+        if archived_by != actor_id or _now() - archived_at > RESTORE_WINDOW:
+            raise HTTPException(403, "forbidden")
+    out: dict[str, Any] = {}
+    data: dict[str, Any] = {}
+
+    def change(s: Session) -> None:
+        result = s.execute(
+            update(Card)
+            .where(
+                Card.id == card_id,
+                Card.board_id == board_id,
+                Card.archived_at == archived_at,
+            )
+            .values(archived_at=None, archived_by=None)
+        )
+        if result.rowcount == 0:
+            raise HTTPException(404, "card_not_found")
+        # The role may have changed since the dependency ran; the window applies to non-owners.
+        role = ensure_role(s, ctx.user, board_id, "member")
+        if role != "owner" and (archived_by != actor_id or _now() - archived_at > RESTORE_WINDOW):
+            raise HTTPException(403, "forbidden")
+        card = s.get(Card, card_id)
+        s.refresh(card)
+        from_list_id = card.list_id
+        if s.get(BoardList, from_list_id).archived_at is not None:
+            first = s.scalar(
+                select(BoardList.id)
+                .where(BoardList.board_id == board_id, BoardList.archived_at.is_(None))
+                .order_by(BoardList.position, BoardList.id)
+                .limit(1)
+            )
+            if first is None:
+                raise HTTPException(409, "no_list")
+            end = (
+                select(func.coalesce(func.max(Card.position), 0.0) + 1)
+                .where(Card.list_id == first)
+                .scalar_subquery()
+            )
+            s.execute(update(Card).where(Card.id == card_id).values(list_id=first, position=end))
+        _check_limit(s, board_id)
+        out.update(tile_of(s, board_id, prefix, card_id))
+        data.update(key=out["key"], list_id=out["list_id"], from_list_id=from_list_id)
+
+    record_change(
+        db,
+        change,
+        actor_id=actor_id,
+        kind="card.restored",
+        subject_type="card",
+        subject_id=str(card_id),
+        data=data,
+        board_id=board_id,
+    )
+    return out
+
+
+__all__ = ["MAX_CARDS", "RESTORE_WINDOW", "router", "visible_card_count"]

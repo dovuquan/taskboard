@@ -133,6 +133,7 @@ export type DialogControls = {
   onMoveTo: (listId: number) => void;
   onCopy: () => void;
   onCopyLink: () => void;
+  onArchive: () => void;
 };
 
 type ViewProps = {
@@ -457,6 +458,19 @@ function CardMenu({
       <button className="item" type="button" role="menuitem" onClick={() => c.onCopyLink?.()}>
         Copy link
       </button>
+      {editor && (
+        <>
+          <hr />
+          <button
+            className="item danger"
+            type="button"
+            role="menuitem"
+            onClick={() => c.onArchive?.()}
+          >
+            Archive card
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -882,7 +896,8 @@ export type CardEditor = {
   cancelDraft: () => void;
   saveDraft: () => void;
   retryDetail: () => void;
-  requestClose: () => void;
+  /** Closes the dialog; false when unsaved text keeps it open (a toast says so). */
+  requestClose: () => boolean;
   copyLink: () => void;
 };
 
@@ -1200,7 +1215,7 @@ export function useCardEditor({
     });
   }
 
-  function requestClose() {
+  function requestClose(): boolean {
     const blocker = closeBlocker({
       canEdit: canEditNow.current,
       draft: draftNow.current,
@@ -1209,10 +1224,11 @@ export function useCardEditor({
     if (blocker !== null) {
       // Not silently: the dialog stays open until the person saves, posts or clears the text.
       notify(blocker === "description" ? DRAFT_OPEN_TEXT : COMMENT_OPEN_TEXT);
-      return;
+      return false;
     }
     dispatch({ type: "close", id: shownNow.current?.id ?? null });
     navigate(`/boards/${boardId}`);
+    return true;
   }
 
   async function copyLink() {
@@ -1285,6 +1301,8 @@ type Props = {
   /** Moves a card to the end of another list, through the board's move rule. */
   onMoveCardTo: (cardId: number, listId: number) => void;
   onCopyCard: (cardId: number) => void;
+  /** Archives a card: the tile leaves the board at once, and the toast brings Undo. */
+  onArchiveCard: (cardId: number) => void;
 };
 
 /**
@@ -1301,6 +1319,7 @@ export function CardDialog({
   editor: ed,
   onMoveCardTo,
   onCopyCard,
+  onArchiveCard,
 }: Props) {
   const [pop, setPop] = useState<Pop>(null);
   const [memberQuery, setMemberQuery] = useState("");
@@ -1436,6 +1455,12 @@ export function CardDialog({
     onCopyLink: () => {
       setPop(null);
       ed.copyLink();
+    },
+    onArchive: () => {
+      setPop(null);
+      const id = tile?.id;
+      // Unsaved text keeps the dialog (and the card) as it is; the person saves or clears it first.
+      if (id !== undefined && ed.requestClose()) onArchiveCard(id);
     },
   };
 

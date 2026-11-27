@@ -48,6 +48,8 @@ describe("activityText", () => {
     ["card.member_removed", { key: "TB-3", user_id: 1 }, "removed Ann Lee from this card"],
     ["card.label_added", { key: "TB-3", label_id: 2, name: "Bug" }, "added the label Bug"],
     ["card.label_removed", { key: "TB-3", label_id: 2, name: "Bug" }, "removed the label Bug"],
+    ["card.archived", { key: "TB-3", list_id: 11 }, "archived this card"],
+    ["card.restored", { key: "TB-3", list_id: 11 }, "restored this card"],
     ["checklist.item_added", { key: "TB-3", item_id: 5, text: "Tape" }, "added Tape to the checklist"],
     ["checklist.item_checked", { key: "TB-3", item_id: 5, text: "Tape" }, "checked Tape"],
     ["checklist.item_unchecked", { key: "TB-3", item_id: 5, text: "Tape" }, "unchecked Tape"],

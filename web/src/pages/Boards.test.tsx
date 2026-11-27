@@ -212,9 +212,53 @@ describe("BoardsView boards without an owner", () => {
   });
 });
 
+describe("BoardsView archived boards", () => {
+  const old = { ...tile({ id: 9, name: "Old project" }), archived_at: "2026-11-20T11:59:30Z" };
+  const older = { ...tile({ id: 10, name: "Older project" }), archived_at: "2026-11-20T10:00:00Z" };
+
+  it("lists them with when they were archived and a Restore button", () => {
+    const { html, text } = render({ archived: [old, older], tiles: [tile()] });
+    expect(text).toContain("Archived boards");
+    expect(text).toContain("Old project Archived just now · its lists and cards are kept");
+    expect(text).toContain("Older project Archived 2h ago · its lists and cards are kept");
+    expect((html.match(/>Restore<\/button>/g) ?? []).length).toBe(2);
+  });
+
+  it("is hidden when nothing is archived", () => {
+    expect(render({ archived: [], tiles: [tile()] }).text).not.toContain("Archived boards");
+    expect(render({ tiles: [tile()] }).text).not.toContain("Archived boards");
+  });
+
+  it("is hidden while the boards are loading or failed to load", () => {
+    expect(render({ state: "loading", archived: [old] }).text).not.toContain("Archived boards");
+    expect(render({ state: "server", archived: [old] }).text).not.toContain("Archived boards");
+  });
+
+  it("disables Restore while a restore is out", () => {
+    const { html } = render({ archived: [old], tiles: [tile()], busy: true });
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Restore<\/button>/);
+  });
+
+  it("does not list an archived board among the tiles", () => {
+    const { html } = render({ archived: [old], tiles: [tile()] });
+    expect(html).not.toContain('href="/boards/9"');
+  });
+});
+
 describe("BoardsView toast", () => {
   it("shows the message as a status", () => {
     const { html } = render({ tiles: [tile()], message: "Created Q4 Launch" });
     expect(html).toContain('<div class="toast" role="status"><span>Created Q4 Launch</span></div>');
+  });
+
+  it("shows an Undo button when the toast carries an undo", () => {
+    const { html } = render({
+      tiles: [tile()],
+      message: "Archived Office move. Nothing is deleted.",
+      onUndo: () => {},
+    });
+    expect(html).toContain(
+      '<div class="toast" role="status"><span>Archived Office move. Nothing is deleted.</span><button type="button">Undo</button></div>',
+    );
   });
 });

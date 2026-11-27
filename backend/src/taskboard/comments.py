@@ -64,6 +64,8 @@ _FEED_KINDS: dict[str, tuple[str, ...]] = {
     "card.member_removed": ("key", "user_id"),
     "card.label_added": ("key", "label_id", "name"),
     "card.label_removed": ("key", "label_id", "name"),
+    "card.archived": ("key", "list_id"),
+    "card.restored": ("key", "list_id"),
     **{
         f"checklist.{kind}": ("key", "item_id", "text")
         for kind in (
