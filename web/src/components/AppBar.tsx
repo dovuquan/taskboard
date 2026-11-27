@@ -6,12 +6,14 @@ import { Avatar } from "./Avatar";
 import { BrandMark } from "./BrandMark";
 import { Link } from "./Link";
 
-type Screen = "boards" | "members" | "board";
+type Screen = "boards" | "members" | "board" | "archived";
 
 type AppBarViewProps = {
   user: Me;
   screen: Screen;
   boardName?: string | null;
+  /** The board whose Archived view this is; the crumb for its name links back to it. */
+  boardId?: number | null;
   open: boolean;
   onToggle: () => void;
   onSignOut: () => void;
@@ -24,6 +26,7 @@ export function AppBarView({
   user,
   screen,
   boardName,
+  boardId,
   open,
   onToggle,
   onSignOut,
@@ -40,13 +43,23 @@ export function AppBarView({
       </Link>
       <nav className="crumbs" aria-label="Breadcrumb">
         <span>/</span>
-        {screen === "board" ? (
+        {screen === "board" || screen === "archived" ? (
           <>
             <Link to="/boards">Boards</Link>
             {boardName && (
               <>
                 <span>/</span>
-                <span>{boardName}</span>
+                {screen === "archived" && boardId != null ? (
+                  <Link to={`/boards/${boardId}`}>{boardName}</Link>
+                ) : (
+                  <span>{boardName}</span>
+                )}
+              </>
+            )}
+            {screen === "archived" && (
+              <>
+                <span>/</span>
+                <span>Archived</span>
               </>
             )}
           </>
@@ -96,10 +109,12 @@ export function AppBar({
   user,
   screen = "boards",
   boardName,
+  boardId,
 }: {
   user: Me;
   screen?: Screen;
   boardName?: string | null;
+  boardId?: number | null;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -132,6 +147,7 @@ export function AppBar({
       user={user}
       screen={screen}
       boardName={boardName}
+      boardId={boardId}
       open={open}
       onToggle={() => send("toggle")}
       onSignOut={() => {

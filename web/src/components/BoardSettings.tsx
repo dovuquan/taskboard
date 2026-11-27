@@ -9,6 +9,7 @@ import {
   type Member,
   type Visibility,
   addBoardMember,
+  archiveBoard,
   getBoardMembers,
   getMembers,
   patchBoard,
@@ -16,6 +17,7 @@ import {
   setBoardRole,
 } from "../api";
 import { addMatches, describeFailure, lastOwnerBlock, roleChangedText, roleChip } from "../boards/logic";
+import { archiveBoardConfirmText } from "../archive/text";
 import { workspaceVisibilityText } from "../boards/text";
 import { Avatar } from "./Avatar";
 import { Icon } from "./Icon";
@@ -32,6 +34,8 @@ type ViewProps = {
   name: string;
   query: string;
   busy: boolean;
+  /** The archive box is asking "are you sure". */
+  confirmArchive?: boolean;
   onName?: (name: string) => void;
   onNameCommit?: () => void;
   onVisibility?: (visibility: Visibility) => void;
@@ -40,6 +44,9 @@ type ViewProps = {
   onAdd?: (userId: number) => void;
   onClose?: () => void;
   onRetry?: () => void;
+  onAskArchive?: () => void;
+  onCancelArchive?: () => void;
+  onArchive?: () => void;
 };
 
 function PersonRow({
@@ -144,6 +151,7 @@ function AddPerson({
 export function BoardSettingsView(props: ViewProps) {
   const { board, people, peopleState, workspace, me, domain, name, query, busy } = props;
   const { onName, onNameCommit, onVisibility, onRole, onQuery, onAdd, onClose, onRetry } = props;
+  const { confirmArchive = false, onAskArchive, onCancelArchive, onArchive } = props;
   const can = board.my_role === "owner";
   const count = peopleState === "ready" ? people.length : board.member_count;
 
@@ -257,6 +265,43 @@ export function BoardSettingsView(props: ViewProps) {
               />
             )}
           </div>
+          {can && (
+            <div className="dangerbox">
+              <b>Archive this board</b>
+              {confirmArchive ? (
+                <>
+                  <p>{archiveBoardConfirmText(board.name)}</p>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      className="btn danger solid sm"
+                      type="button"
+                      disabled={busy}
+                      onClick={onArchive}
+                    >
+                      Archive board
+                    </button>
+                    <button className="btn ghost sm" type="button" onClick={onCancelArchive}>
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>Hides the board from everyone. You can restore it later.</p>
+                  <div>
+                    <button
+                      className="btn danger sm"
+                      type="button"
+                      disabled={busy}
+                      onClick={onAskArchive}
+                    >
+                      Archive board…
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </aside>
     </>
@@ -273,6 +318,8 @@ type Props = {
   /** The session ended (401): the page decides whether to reload, so typed text is not lost. */
   onExpired: () => void;
   onClose: () => void;
+  /** The server archived the board: the page leaves for the Boards screen. */
+  onArchived: (board: { id: number; name: string }) => void;
 };
 
 export function BoardSettings({
@@ -284,6 +331,7 @@ export function BoardSettings({
   onGone,
   onExpired,
   onClose,
+  onArchived,
 }: Props) {
   const id = board.id;
   const can = board.my_role === "owner";
@@ -294,6 +342,7 @@ export function BoardSettings({
   const [name, setName] = useState(board.name);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
 
   useEffect(() => setName(board.name), [board.name]);
 
@@ -383,6 +432,27 @@ export function BoardSettings({
     }
   }
 
+  async function onArchive() {
+    if (busy || !can) return;
+    setBusy(true);
+    const res = await archiveBoard(id);
+    setBusy(false);
+    if (res.kind === "ok") {
+      onArchived(res.data);
+      return;
+    }
+    setConfirmArchive(false);
+    const failure = describeFailure(res.kind);
+    if (failure.expired) onExpired();
+    else if (failure.gone) onGone();
+    else {
+      notify(failure.message);
+      // A 403 means the role changed under us: fetch the current state.
+      onChanged();
+      setAttempt((n) => n + 1);
+    }
+  }
+
   function onAdd(userId: number) {
     if (busy) return;
     const who = workspace.find((m) => m.id === userId);
@@ -401,6 +471,10 @@ export function BoardSettings({
       name={name}
       query={query}
       busy={busy}
+      confirmArchive={confirmArchive}
+      onAskArchive={() => setConfirmArchive(true)}
+      onCancelArchive={() => setConfirmArchive(false)}
+      onArchive={() => void onArchive()}
       onName={setName}
       onNameCommit={onNameCommit}
       onVisibility={onVisibility}

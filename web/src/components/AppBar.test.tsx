@@ -87,6 +87,16 @@ describe("AppBar", () => {
     expect(html).toContain('<a class="navlink on" href="/boards">Boards</a>');
   });
 
+  it("shows Boards / {name} / Archived on the Archived view, with the name linking back", () => {
+    const html = renderToString(
+      <AppBar user={ann} screen="archived" boardName="Office move" boardId={7} />,
+    );
+    expect(html).toContain(
+      '<nav class="crumbs" aria-label="Breadcrumb"><span>/</span><a href="/boards">Boards</a><span>/</span><a href="/boards/7">Office move</a><span>/</span><span>Archived</span></nav>',
+    );
+    expect(html).toContain('<a class="navlink on" href="/boards">Boards</a>');
+  });
+
   it("shows just Boards on a board whose name has not loaded", () => {
     const { html } = render(ann, "board", null);
     expect(html).toContain(

@@ -59,6 +59,10 @@ export function activityText(entry: EventEntry, ctx: ActivityContext): string {
       return `added the label ${str(d.name) ?? "a label"}`;
     case "card.label_removed":
       return `removed the label ${str(d.name) ?? "a label"}`;
+    case "card.archived":
+      return "archived this card";
+    case "card.restored":
+      return "restored this card";
     case "checklist.item_added":
       return `added ${item} to the checklist`;
     case "checklist.item_checked":

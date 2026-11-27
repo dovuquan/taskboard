@@ -239,6 +239,27 @@ export const setBoardRole = (id: number, userId: number, role: BoardRole) =>
 export const removeBoardMember = (id: number, userId: number) =>
   call<undefined>("DELETE", `/api/boards/${id}/members/${userId}`);
 
+/** An archived board on the Boards screen, newest first. */
+export type ArchivedBoard = Tile & { archived_at: string };
+/** An archived list; `card_count` is the cards it brings back. */
+export type ArchivedList = { id: number; name: string; card_count: number; archived_at: string };
+/** A card archived on its own; `list_name` is the list it came from. */
+export type ArchivedCard = {
+  id: number;
+  key: string;
+  title: string;
+  list_id: number;
+  list_name: string;
+  archived_at: string;
+};
+export type Archived = { lists: ArchivedList[]; cards: ArchivedCard[] };
+
+export const archiveBoard = (id: number) =>
+  call<{ id: number; name: string }>("POST", `/api/boards/${id}/archive`);
+export const restoreBoard = (id: number) => call<BoardDetail>("POST", `/api/boards/${id}/restore`);
+export const getArchivedBoards = () => call<ArchivedBoard[]>("GET", "/api/boards/archived");
+export const getArchived = (id: number) => call<Archived>("GET", `/api/boards/${id}/archived`);
+
 export const getLists = (boardId: number) =>
   callList<BoardList[]>("GET", `/api/boards/${boardId}/lists`);
 export const createList = (boardId: number, name: string) =>
@@ -318,6 +339,7 @@ export type CardError =
   | "card_limit"
   | "card_not_found"
   | "list_not_found"
+  | "no_list"
   | "not_assignable"
   | "label_not_found"
   | "item_not_found"
@@ -351,6 +373,7 @@ function cardFailure(status: number, body: unknown): CardError {
   if (status === 404 && detail === "label_not_found") return "label_not_found";
   if (status === 404 && detail === "item_not_found") return "item_not_found";
   if (status === 404 && detail === "comment_not_found") return "comment_not_found";
+  if (status === 409 && detail === "no_list") return "no_list";
   if (status === 403 && detail === "edit_window_closed") return "edit_window_closed";
   if (status === 422 && detail === "checklist_limit") return "checklist_limit";
   if (status === 422 && detail === "comment_limit") return "comment_limit";
@@ -369,6 +392,11 @@ export const createCard = (boardId: number, listId: number, title: string) =>
   callCard<Card>("POST", `/api/boards/${boardId}/cards`, { list_id: listId, title });
 export const copyCard = (boardId: number, cardId: number) =>
   callCard<Card>("POST", `/api/boards/${boardId}/cards/${cardId}/copy`, {});
+
+export const archiveCard = (boardId: number, cardId: number) =>
+  callCard<Card>("POST", `/api/boards/${boardId}/cards/${cardId}/archive`);
+export const restoreCard = (boardId: number, cardId: number) =>
+  callCard<Card>("POST", `/api/boards/${boardId}/cards/${cardId}/restore`);
 
 export const getLabels = () => callCard<Label[]>("GET", "/api/labels");
 export const getCard = (boardId: number, cardId: number) =>

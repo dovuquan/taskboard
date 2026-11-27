@@ -7,6 +7,7 @@ export type Screen =
   | "boards"
   | "board"
   | "board-settings"
+  | "board-archived"
   | "board-card"
   | "members"
   | "error";
@@ -16,10 +17,13 @@ export function needsMemberCount(screen: Screen): boolean {
   return screen === "boards";
 }
 
-const BOARD_PATH = /^\/boards\/([1-9]\d{0,14})(\/settings|\/cards\/[^/]+)?\/?$/;
+const BOARD_PATH = /^\/boards\/([1-9]\d{0,14})(\/settings|\/archived|\/cards\/[^/]+)?\/?$/;
 const CARD_PATH = /^\/boards\/[1-9]\d{0,14}\/cards\/([^/]+)\/?$/;
 
-/** The board id in `/boards/7`, `/boards/7/settings` or `/boards/7/cards/TB-3`; null otherwise. */
+/**
+ * The board id in `/boards/7`, `/boards/7/settings`, `/boards/7/archived` or
+ * `/boards/7/cards/TB-3`; null otherwise.
+ */
 export function boardIdFromPath(path: string): number | null {
   const match = BOARD_PATH.exec(path);
   return match ? Number(match[1]) : null;
@@ -49,7 +53,9 @@ function signedInScreen(path: string): Screen {
   if (path === "/members") return "members";
   if (boardIdFromPath(path) !== null) {
     if (cardKeyFromPath(path) !== null) return "board-card";
-    return path.replace(/\/$/, "").endsWith("/settings") ? "board-settings" : "board";
+    const end = path.replace(/\/$/, "");
+    if (end.endsWith("/archived")) return "board-archived";
+    return end.endsWith("/settings") ? "board-settings" : "board";
   }
   return "boards";
 }

@@ -120,18 +120,25 @@ describe.each(["owner", "member"] as const)("CardDialogView for a board %s", (ro
     const { html, text } = render({ ui: { pop: "menu" } }, role);
     expect(html).toContain('role="menu"');
     expect(text).toContain("Move to");
-    expect(items(html)).toEqual(["Doing", "Done", "Copy card", "Copy link"]);
+    expect(items(html)).toEqual(["Doing", "Done", "Copy card", "Copy link", "Archive card"]);
   });
 
   it("hides Copy card at 1,000 cards", () => {
     const { html } = render({ ui: { pop: "menu" }, total: 1000 }, role);
-    expect(items(html)).toEqual(["Doing", "Done", "Copy link"]);
+    expect(items(html)).toEqual(["Doing", "Done", "Copy link", "Archive card"]);
     const at999 = render({ ui: { pop: "menu" }, total: 999 }, role);
     expect(items(at999.html)).toContain("Copy card");
   });
 
-  it("has no Archive card item (it arrives later)", () => {
-    expect(render({ ui: { pop: "menu" } }, role).text).not.toContain("Archive card");
+  it("ends the menu with a danger Archive card item", () => {
+    const { html } = render({ ui: { pop: "menu" } }, role);
+    expect(items(html)).toEqual(["Doing", "Done", "Copy card", "Copy link", "Archive card"]);
+    expect(html).toMatch(/<button class="item danger"[^>]*role="menuitem"[^>]*>Archive card<\/button>/);
+  });
+
+  it("keeps Archive card when Copy card is hidden at 1,000 cards", () => {
+    const { html } = render({ ui: { pop: "menu" }, total: 1000 }, role);
+    expect(items(html)).toEqual(["Doing", "Done", "Copy link", "Archive card"]);
   });
 
   it("shows a Clear button once a due date is set", () => {
@@ -186,6 +193,7 @@ describe("CardDialogView for an observer", () => {
   it("offers Copy link only in the menu", () => {
     const { html, text } = observer({ ui: { pop: "menu" } });
     expect(items(html)).toEqual(["Copy link"]);
+    expect(html).not.toContain("Archive card");
     expect(text).not.toContain("Move to");
     expect(text).not.toContain("Copy card");
   });

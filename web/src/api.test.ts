@@ -5,6 +5,8 @@ import {
   addCardLabel,
   addCardMember,
   addChecklistItem,
+  archiveBoard,
+  archiveCard,
   archiveList,
   copyCard,
   createBoard,
@@ -13,6 +15,8 @@ import {
   deleteChecklistItem,
   deleteComment,
   editComment,
+  getArchived,
+  getArchivedBoards,
   getBoard,
   getCard,
   getCards,
@@ -26,6 +30,8 @@ import {
   getLists,
   moveList,
   renameList,
+  restoreBoard,
+  restoreCard,
   restoreChecklistItem,
   restoreComment,
   restoreList,
@@ -802,5 +808,81 @@ describe("signOut", () => {
       throw new TypeError("offline");
     });
     await expect(signOut()).resolves.toBeUndefined();
+  });
+});
+
+describe("archive api", () => {
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>, n = 0) {
+    return fetchMock.mock.calls[n] as unknown as [string, RequestInit];
+  }
+
+  it("archives and restores a board with POST and no body", async () => {
+    const fetchMock = stubFetch(async () => reply(200, { id: 7, name: "Office move" }));
+    expect(await archiveBoard(7)).toEqual({ kind: "ok", data: { id: 7, name: "Office move" } });
+    await restoreBoard(7);
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    const second = lastCall(fetchMock, 1);
+    expect(second[0]).toBe("/api/boards/7/restore");
+    expect(second[1].method).toBe("POST");
+  });
+
+  it("reads the archived boards", async () => {
+    const rows = [{ id: 7, name: "Old", archived_at: "2026-11-20T09:00:00Z" }];
+    const fetchMock = stubFetch(async () => reply(200, rows));
+    expect(await getArchivedBoards()).toEqual({ kind: "ok", data: rows });
+    const [url, init] = lastCall(fetchMock);
+    expect(url).toBe("/api/boards/archived");
+    expect(init.method).toBe("GET");
+  });
+
+  it("reads the archived lists and cards of a board", async () => {
+    const view = { lists: [], cards: [] };
+    const fetchMock = stubFetch(async () => reply(200, view));
+    expect(await getArchived(7)).toEqual({ kind: "ok", data: view });
+    expect(lastCall(fetchMock)[0]).toBe("/api/boards/7/archived");
+  });
+
+  it("archives and restores a card with POST and no body", async () => {
+    const tile = { id: 9, key: "TB-9", list_id: 4, title: "Pack boxes" };
+    const fetchMock = stubFetch(async () => reply(200, tile));
+    expect(await archiveCard(7, 9)).toEqual({ kind: "ok", data: tile });
+    expect(await restoreCard(7, 9)).toEqual({ kind: "ok", data: tile });
+    const first = lastCall(fetchMock, 0);
+    expect(first[0]).toBe("/api/boards/7/cards/9/archive");
+    expect(first[1].method).toBe("POST");
+    expect(first[1].body).toBeUndefined();
+    expect(lastCall(fetchMock, 1)[0]).toBe("/api/boards/7/cards/9/restore");
+  });
+
+  it.each([
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "card_not_found" }, "card_not_found"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [409, { detail: "no_list" }, "no_list"],
+    [422, { detail: "card_limit" }, "card_limit"],
+    [401, { detail: "session_expired" }, "expired"],
+    [500, {}, "server"],
+  ])("maps %s %j on a card restore to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await restoreCard(7, 9)).toEqual({ kind });
+  });
+
+  it.each([
+    [403, { detail: "forbidden" }, "forbidden"],
+    [404, { detail: "board_not_found" }, "not_found"],
+    [500, {}, "server"],
+  ])("maps %s %j on a board archive to %s", async (status, body, kind) => {
+    stubFetch(async () => reply(status, body));
+    expect(await archiveBoard(7)).toEqual({ kind });
+  });
+
+  it("reports a network problem when the request throws", async () => {
+    stubFetch(async () => {
+      throw new TypeError("network down");
+    });
+    expect(await getArchived(7)).toEqual({ kind: "network" });
   });
 });
